@@ -865,30 +865,36 @@ class MenuScene extends Phaser.Scene {
             saveData.gold += bonus;
             saveData.lastDailyBonus = now;
             saveGame();
-            // Show daily bonus popup
+            // Collect all popup elements for clean removal
+            const els = [];
             const bg = this.add.graphics().setDepth(300);
             bg.fillStyle(0x000000, 0.7); bg.fillRect(0, 0, GW, GH);
+            els.push(bg);
+            // Block input to menu behind
+            const blocker = this.add.zone(GW/2, GH/2, GW, GH).setDepth(300).setInteractive();
+            els.push(blocker);
             const popup = this.add.graphics().setDepth(301);
             popup.fillStyle(0x1a1a3a); popup.fillRoundedRect(GW/2-200, GH/2-120, 400, 240, 16);
             popup.lineStyle(2, 0x7ED957); popup.strokeRoundedRect(GW/2-200, GH/2-120, 400, 240, 16);
-            this.add.text(GW/2, GH/2-80, 'DAILY BONUS!', {
+            els.push(popup);
+            els.push(this.add.text(GW/2, GH/2-80, 'DAILY BONUS!', {
                 fontSize: '32px', fontFamily: 'Arial Black,Arial', color: '#7ED957'
-            }).setOrigin(0.5).setDepth(302);
-            this.add.text(GW/2, GH/2-30, '+' + bonus + ' Gold', {
+            }).setOrigin(0.5).setDepth(302));
+            els.push(this.add.text(GW/2, GH/2-30, '+' + bonus + ' Gold', {
                 fontSize: '28px', fontFamily: 'Arial Black,Arial', color: '#FFD700'
-            }).setOrigin(0.5).setDepth(302);
-            this.add.text(GW/2, GH/2+10, 'Come back tomorrow for more!', {
+            }).setOrigin(0.5).setDepth(302));
+            els.push(this.add.text(GW/2, GH/2+10, 'Come back tomorrow for more!', {
                 fontSize: '16px', fontFamily: 'Arial', color: '#aaaacc'
-            }).setOrigin(0.5).setDepth(302);
+            }).setOrigin(0.5).setDepth(302));
             const okBtn = this.add.image(GW/2, GH/2+70, 'btn_green').setDepth(302).setInteractive({ useHandCursor: true });
-            this.add.text(GW/2, GH/2+70, 'COLLECT', {
+            els.push(okBtn);
+            const okTxt = this.add.text(GW/2, GH/2+70, 'COLLECT', {
                 fontSize: '22px', fontFamily: 'Arial Black,Arial', color: '#fff'
             }).setOrigin(0.5).setDepth(303);
+            els.push(okTxt);
             okBtn.on('pointerdown', () => {
                 sfx.play('merge');
-                bg.destroy(); popup.destroy();
-                // Destroy all depth 302-303 objects
-                this.children.each(c => { if (c.depth >= 302) c.destroy(); });
+                els.forEach(e => e.destroy());
             });
         }
     }
