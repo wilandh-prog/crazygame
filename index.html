@@ -110,7 +110,7 @@ for (let r = 0; r < GRID_ROWS; r++) LANE_CENTERS.push(GRID_Y + r * CELL_SPACING 
 const LANE_HEIGHT = CELL_SPACING;
 const MAX_TIER = 10;
 const BLOB_COST = 15;
-const STARTING_GOLD = 30;
+const STARTING_GOLD = 80;
 const STARTING_LIVES = 10;
 const BASE_DAMAGE = 8;
 const BASE_ATTACK_INTERVAL = 1500;
@@ -127,11 +127,11 @@ const TIER_COLORS = [
 ];
 
 const UPGRADE_DEFS = [
-    { key: 'blobPower',       name: 'Blob Power',       desc: '+15% damage',       baseCost: 50,  mult: 1.6 },
-    { key: 'attackSpeed',     name: 'Attack Speed',     desc: '+8% speed',         baseCost: 75,  mult: 1.6 },
-    { key: 'goldRush',        name: 'Gold Rush',        desc: '+15% gold',         baseCost: 60,  mult: 1.6 },
-    { key: 'headStart',       name: 'Head Start',       desc: '+20 starting gold', baseCost: 100, mult: 1.5 },
-    { key: 'reinforcements',  name: 'Reinforcements',   desc: '+1 starting life',  baseCost: 150, mult: 1.7, maxLevel: 5 }
+    { key: 'blobPower',       name: 'Blob Power',       desc: '+15% damage',       baseCost: 20,  mult: 1.5 },
+    { key: 'attackSpeed',     name: 'Attack Speed',     desc: '+8% speed',         baseCost: 30,  mult: 1.5 },
+    { key: 'goldRush',        name: 'Gold Rush',        desc: '+15% gold',         baseCost: 25,  mult: 1.5 },
+    { key: 'headStart',       name: 'Head Start',       desc: '+20 starting gold', baseCost: 40,  mult: 1.4 },
+    { key: 'reinforcements',  name: 'Reinforcements',   desc: '+1 starting life',  baseCost: 60,  mult: 1.6, maxLevel: 5 }
 ];
 
 // ============================================================
