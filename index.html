@@ -109,7 +109,7 @@ const LANE_CENTERS = [];
 for (let r = 0; r < GRID_ROWS; r++) LANE_CENTERS.push(GRID_Y + r * CELL_SPACING + CELL_SIZE / 2);
 const LANE_HEIGHT = CELL_SPACING;
 const MAX_TIER = 10;
-const BLOB_COST = 15;
+const BLOB_COST = 8;
 const STARTING_GOLD = 80;
 const STARTING_LIVES = 10;
 const BASE_DAMAGE = 8;
@@ -139,7 +139,8 @@ const UPGRADE_DEFS = [
 // ============================================================
 let saveData = {
     upgrades: { blobPower: 0, attackSpeed: 0, goldRush: 0, headStart: 0, reinforcements: 0 },
-    gold: 0, highestWave: 0, totalGoldEarned: 0, tutorialDone: false
+    gold: 0, highestWave: 0, totalGoldEarned: 0, tutorialDone: false,
+    lastDailyBonus: 0, totalRuns: 0, bestRuns: []
 };
 
 // ============================================================
@@ -808,6 +809,9 @@ class MenuScene extends Phaser.Scene {
         this.cameras.main.setBackgroundColor('#0a0a1a');
         drawSpaceBackground(this);
 
+        // Daily login bonus check
+        this.checkDailyBonus();
+
         // Decorative blobs
         for (let i = 0; i < 8; i++) {
             const b = this.add.image(
@@ -819,35 +823,74 @@ class MenuScene extends Phaser.Scene {
         }
 
         // Title with pop-in animation
-        const title = this.add.text(GW/2, 160, 'BLOB BATTALION', {
+        const title = this.add.text(GW/2, 130, 'BLOB BATTALION', {
             fontSize: '72px', fontFamily: 'Arial Black,Arial', color: '#7ED957',
             stroke: '#000000', strokeThickness: 6
         }).setOrigin(0.5).setScale(0);
         this.tweens.add({ targets: title, scaleX: 1, scaleY: 1, duration: 500, ease: 'Back.easeOut' });
 
-        this.add.text(GW/2, 240, 'Merge \u2022 Defend \u2022 Conquer', {
+        this.add.text(GW/2, 210, 'Merge \u2022 Defend \u2022 Conquer', {
             fontSize: '24px', fontFamily: 'Arial', color: '#aaaacc'
         }).setOrigin(0.5);
 
+        // Stats row
+        let infoY = 260;
         if (saveData.highestWave > 0) {
-            this.add.text(GW/2, 300, 'Best: Wave ' + saveData.highestWave, {
-                fontSize: '22px', fontFamily: 'Arial', color: '#FFD700'
-            }).setOrigin(0.5);
-        }
-        if (saveData.gold > 0) {
-            this.add.text(GW/2, 335, 'Gold: ' + saveData.gold, {
+            this.add.text(GW/2, infoY, 'Best: Wave ' + saveData.highestWave + '  |  Gold: ' + saveData.gold + '  |  Runs: ' + (saveData.totalRuns || 0), {
                 fontSize: '20px', fontFamily: 'Arial', color: '#FFD700'
             }).setOrigin(0.5);
+            infoY += 30;
         }
 
         // Play button
-        this.makeBtn(GW/2, 430, 'btn_large', 'PLAY', '36px', () => this.scene.start('GameScene'));
+        this.makeBtn(GW/2, 340, 'btn_large', 'PLAY', '36px', () => this.scene.start('GameScene'));
+
+        // Rush Mode button
+        this.makeBtn(GW/2, 450, 'btn_red', 'RUSH MODE', '22px', () => this.scene.start('GameScene', { mode: 'rush' }));
+        this.add.text(GW/2, 485, '90 seconds \u2022 Survive!', {
+            fontSize: '14px', fontFamily: 'Arial', color: '#FF8888'
+        }).setOrigin(0.5);
 
         // Upgrades button
-        if (saveData.gold > 0) {
-            this.makeBtn(GW/2, 530, 'btn_blue', 'UPGRADES', '22px', () => this.scene.start('UpgradeScene', { from: 'menu' }));
-        }
+        this.makeBtn(GW/2, 570, 'btn_blue', 'UPGRADES', '22px', () => this.scene.start('UpgradeScene', { from: 'menu' }));
 
+    }
+
+    checkDailyBonus() {
+        const now = Date.now();
+        const lastBonus = saveData.lastDailyBonus || 0;
+        const oneDay = 24 * 60 * 60 * 1000;
+        if (now - lastBonus >= oneDay) {
+            const bonus = 25;
+            saveData.gold += bonus;
+            saveData.lastDailyBonus = now;
+            saveGame();
+            // Show daily bonus popup
+            const bg = this.add.graphics().setDepth(300);
+            bg.fillStyle(0x000000, 0.7); bg.fillRect(0, 0, GW, GH);
+            const popup = this.add.graphics().setDepth(301);
+            popup.fillStyle(0x1a1a3a); popup.fillRoundedRect(GW/2-200, GH/2-120, 400, 240, 16);
+            popup.lineStyle(2, 0x7ED957); popup.strokeRoundedRect(GW/2-200, GH/2-120, 400, 240, 16);
+            this.add.text(GW/2, GH/2-80, 'DAILY BONUS!', {
+                fontSize: '32px', fontFamily: 'Arial Black,Arial', color: '#7ED957'
+            }).setOrigin(0.5).setDepth(302);
+            this.add.text(GW/2, GH/2-30, '+' + bonus + ' Gold', {
+                fontSize: '28px', fontFamily: 'Arial Black,Arial', color: '#FFD700'
+            }).setOrigin(0.5).setDepth(302);
+            this.add.text(GW/2, GH/2+10, 'Come back tomorrow for more!', {
+                fontSize: '16px', fontFamily: 'Arial', color: '#aaaacc'
+            }).setOrigin(0.5).setDepth(302);
+            const okBtn = this.add.image(GW/2, GH/2+70, 'btn_green').setDepth(302).setInteractive({ useHandCursor: true });
+            this.add.text(GW/2, GH/2+70, 'COLLECT', {
+                fontSize: '22px', fontFamily: 'Arial Black,Arial', color: '#fff'
+            }).setOrigin(0.5).setDepth(303);
+            okBtn.on('pointerdown', () => {
+                sfx.play('merge');
+                bg.destroy(); popup.destroy();
+                // Destroy all depth 302-303 objects
+                this.children.each(c => { if (c.depth >= 302) c.destroy(); });
+            });
+        }
     }
 
     makeBtn(x, y, tex, label, size, cb) {
@@ -866,8 +909,9 @@ class MenuScene extends Phaser.Scene {
 class GameScene extends Phaser.Scene {
     constructor() { super('GameScene'); }
 
-    init() {
+    init(data) {
         const u = saveData.upgrades;
+        this.gameMode = (data && data.mode) || 'normal';
         this.gold = STARTING_GOLD + u.headStart * 20;
         this.lives = STARTING_LIVES + u.reinforcements;
         this.currentWave = 0;
@@ -886,6 +930,9 @@ class GameScene extends Phaser.Scene {
         this.isPaused = false;
         this.purchaseCount = 0;
         this.tutStep = saveData.tutorialDone ? -1 : 0;
+        // Rush mode: 90 second timer, faster waves, more gold
+        this.rushTimer = this.gameMode === 'rush' ? 90000 : 0;
+        this.rushComplete = false;
     }
 
     create() {
@@ -937,6 +984,23 @@ class GameScene extends Phaser.Scene {
         this.goldText = this.add.text(GW/2, 20, 'Gold: ' + this.gold, { fontSize: '24px', fontFamily: 'Arial', color: '#FFD700' }).setOrigin(0.5, 0);
         this.livesText = this.add.text(GW-30, 20, 'Lives: ' + this.lives, { fontSize: '24px', fontFamily: 'Arial', color: '#FF6666' }).setOrigin(1, 0);
         this.waveBanner = this.add.text(GW/2, GH/2-50, '', { fontSize: '48px', fontFamily: 'Arial Black,Arial', color: '#fff', stroke: '#000', strokeThickness: 4 }).setOrigin(0.5).setAlpha(0).setDepth(100);
+
+        // Rush mode timer
+        if (this.gameMode === 'rush') {
+            this.rushText = this.add.text(GW/2, 52, '1:30', {
+                fontSize: '22px', fontFamily: 'Arial Black,Arial', color: '#FF8888',
+                stroke: '#000', strokeThickness: 2
+            }).setOrigin(0.5, 0);
+            this.showBanner('RUSH MODE - 90s!');
+        }
+
+        // Mode label
+        if (this.gameMode === 'rush') {
+            this.add.text(230, 28, 'RUSH', {
+                fontSize: '16px', fontFamily: 'Arial Black,Arial', color: '#FF4444',
+                backgroundColor: '#441111', padding: { x: 6, y: 2 }
+            });
+        }
 
         // Buy button (below grid)
         const bx = GRID_X + (GRID_COLS * CELL_SPACING - CELL_GAP) / 2;
@@ -1000,7 +1064,7 @@ class GameScene extends Phaser.Scene {
         if (this.tutStep >= 0) this.showTutorial();
 
         // Start
-        this.waveDelayTimer = 2500;
+        this.waveDelayTimer = this.gameMode === 'rush' ? 1000 : 2500;
         this.waveState = 'PRE_WAVE';
         sdkGameplayStart();
     }
@@ -1154,7 +1218,7 @@ class GameScene extends Phaser.Scene {
 
     // ---- BUYING ----
 
-    blobCost() { return BLOB_COST + this.purchaseCount * 3; }
+    blobCost() { return BLOB_COST + this.purchaseCount * 2; }
 
     canBuy() { return this.gold >= this.blobCost() && this.emptyCells().length > 0; }
 
@@ -1238,6 +1302,21 @@ class GameScene extends Phaser.Scene {
 
     update(time, delta) {
         if (this.isGameOver || this.isPaused) return;
+        // Rush mode countdown
+        if (this.gameMode === 'rush' && !this.rushComplete) {
+            this.rushTimer -= delta;
+            if (this.rushTimer <= 0) {
+                this.rushTimer = 0;
+                this.rushComplete = true;
+                this.rushVictory();
+                return;
+            }
+            const secs = Math.ceil(this.rushTimer / 1000);
+            const min = Math.floor(secs / 60);
+            const sec = secs % 60;
+            this.rushText.setText(min + ':' + (sec < 10 ? '0' : '') + sec);
+            this.rushText.setColor(secs <= 10 ? '#FF2222' : secs <= 30 ? '#FFAA00' : '#FF8888');
+        }
         this.updateWave(delta);
         this.updateAttacks(delta);
         this.updateProjectiles();
@@ -1267,7 +1346,7 @@ class GameScene extends Phaser.Scene {
                 break;
             case 'WAVE_DONE':
                 this.waveDelayTimer -= dt;
-                if (this.waveDelayTimer <= 0) { this.waveState = 'PRE_WAVE'; this.waveDelayTimer = 1000; }
+                if (this.waveDelayTimer <= 0) { this.waveState = 'PRE_WAVE'; this.waveDelayTimer = this.gameMode === 'rush' ? 400 : 1000; }
                 break;
         }
     }
@@ -1768,8 +1847,32 @@ class GameScene extends Phaser.Scene {
         }
 
         this.waveState = 'WAVE_DONE';
-        this.waveDelayTimer = 3000;
+        this.waveDelayTimer = this.gameMode === 'rush' ? 1000 : 3000;
         saveGame();
+    }
+
+    rushVictory() {
+        this.isGameOver = true;
+        sdkGameplayStop();
+        sdkHappyTime();
+        const bonus = Math.floor(this.runGold * 0.5);
+        this.runGold += bonus;
+        saveData.gold += this.runGold;
+        saveData.totalGoldEarned += this.runGold;
+        saveData.totalRuns = (saveData.totalRuns || 0) + 1;
+        if (this.currentWave > saveData.highestWave) saveData.highestWave = this.currentWave;
+        if (!saveData.bestRuns) saveData.bestRuns = [];
+        saveData.bestRuns.push({ wave: this.currentWave, gold: this.runGold, date: Date.now() });
+        saveData.bestRuns.sort((a, b) => b.wave - a.wave || b.gold - a.gold);
+        if (saveData.bestRuns.length > 5) saveData.bestRuns.length = 5;
+        saveGame();
+
+        this.showBanner('SURVIVED! +50% BONUS!');
+        sfx.play('wave');
+        this.shake(0.008, 200);
+        this.time.delayedCall(2000, () => {
+            this.scene.start('GameOverScene', { wave: this.currentWave, gold: this.runGold, newBest: false, rushWin: true });
+        });
     }
 
     gameOver() {
@@ -1778,14 +1881,23 @@ class GameScene extends Phaser.Scene {
         sdkGameplayStop();
         saveData.gold += this.runGold;
         saveData.totalGoldEarned += this.runGold;
-        if (this.currentWave > saveData.highestWave) saveData.highestWave = this.currentWave;
+        saveData.totalRuns = (saveData.totalRuns || 0) + 1;
+        const isNewBest = this.currentWave > saveData.highestWave;
+        if (isNewBest) saveData.highestWave = this.currentWave;
+
+        // Record to leaderboard
+        if (!saveData.bestRuns) saveData.bestRuns = [];
+        saveData.bestRuns.push({ wave: this.currentWave, gold: this.runGold, date: Date.now() });
+        saveData.bestRuns.sort((a, b) => b.wave - a.wave || b.gold - a.gold);
+        if (saveData.bestRuns.length > 5) saveData.bestRuns.length = 5;
         saveGame();
 
+        if (isNewBest && this.currentWave >= 5) sdkHappyTime();
         this.showBanner('GAME OVER');
         sfx.play('gameover');
         this.shake(0.012, 300);
         this.time.delayedCall(1500, () => {
-            this.scene.start('GameOverScene', { wave: this.currentWave, gold: this.runGold });
+            this.scene.start('GameOverScene', { wave: this.currentWave, gold: this.runGold, newBest: isNewBest });
         });
     }
 
@@ -1849,49 +1961,139 @@ class GameScene extends Phaser.Scene {
 class GameOverScene extends Phaser.Scene {
     constructor() { super('GameOverScene'); }
 
-    init(data) { this.waveReached = data.wave || 0; this.goldEarned = data.gold || 0; }
+    init(data) { this.waveReached = data.wave || 0; this.goldEarned = data.gold || 0; this.newBest = data.newBest || false; this.rushWin = data.rushWin || false; }
 
     create() {
         this.cameras.main.setBackgroundColor('#0f0f23');
 
-        this.add.text(GW/2, 120, 'GAME OVER', {
-            fontSize: '64px', fontFamily: 'Arial Black,Arial', color: '#FF4444',
+        // Left column — results + hooks
+        const lx = GW * 0.35;
+
+        if (this.newBest) {
+            const nb = this.add.text(lx, 60, 'NEW BEST!', {
+                fontSize: '28px', fontFamily: 'Arial Black,Arial', color: '#FFD700',
+                stroke: '#000', strokeThickness: 3
+            }).setOrigin(0.5);
+            this.tweens.add({ targets: nb, scaleX: 1.15, scaleY: 1.15, duration: 500, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+        }
+
+        const titleText = this.rushWin ? 'YOU SURVIVED!' : 'GAME OVER';
+        const titleColor = this.rushWin ? '#7ED957' : '#FF4444';
+        this.add.text(lx, 100, titleText, {
+            fontSize: '52px', fontFamily: 'Arial Black,Arial', color: titleColor,
             stroke: '#000', strokeThickness: 5
         }).setOrigin(0.5);
 
-        this.add.text(GW/2, 220, 'Wave Reached: ' + this.waveReached, {
-            fontSize: '32px', fontFamily: 'Arial', color: '#fff'
+        this.add.text(lx, 170, 'Wave ' + this.waveReached, {
+            fontSize: '36px', fontFamily: 'Arial Black,Arial', color: '#fff'
         }).setOrigin(0.5);
 
-        this.add.text(GW/2, 270, 'Gold Earned: ' + this.goldEarned, {
-            fontSize: '28px', fontFamily: 'Arial', color: '#FFD700'
-        }).setOrigin(0.5);
-
-        this.add.text(GW/2, 310, 'Total Gold: ' + saveData.gold, {
+        this.add.text(lx, 215, '+' + this.goldEarned + ' gold earned', {
             fontSize: '22px', fontFamily: 'Arial', color: '#FFD700'
         }).setOrigin(0.5);
 
-        // 2x Gold (rewarded ad)
-        this.doubleBtn = this.makeBtn(GW/2, 400, 'btn_wide', '2x GOLD (Watch Ad)', '18px', () => {
+        this.add.text(lx, 248, 'Total: ' + saveData.gold + 'g', {
+            fontSize: '18px', fontFamily: 'Arial', color: '#ccaa44'
+        }).setOrigin(0.5);
+
+        // "One more round" hook — show cheapest upgrade you can almost afford
+        const hook = this.getUpgradeHook();
+        if (hook) {
+            this.add.text(lx, 295, hook.text, {
+                fontSize: '16px', fontFamily: 'Arial', color: '#00FF88',
+                wordWrap: { width: 380 }, align: 'center'
+            }).setOrigin(0.5);
+        }
+
+        // Buttons
+        this.doubleBtn = this.makeBtn(lx, 360, 'btn_wide', '2x GOLD (Ad)', '18px', () => {
             this.doubleBtn.disableInteractive();
             showRewardedAd(
                 () => {
                     saveData.gold += this.goldEarned;
                     saveData.totalGoldEarned += this.goldEarned;
                     saveGame();
-                    this.add.text(GW/2, 440, 'Doubled! +' + this.goldEarned + 'g', {
-                        fontSize: '22px', fontFamily: 'Arial', color: '#00FF88'
+                    this.add.text(lx, 395, 'Doubled! +' + this.goldEarned + 'g', {
+                        fontSize: '18px', fontFamily: 'Arial', color: '#00FF88'
                     }).setOrigin(0.5);
                 },
                 () => { this.doubleBtn.setInteractive({ useHandCursor: true }); }
             );
         });
 
-        // Upgrades
-        this.makeBtn(GW/2, 500, 'btn_blue', 'UPGRADES', '22px', () => this.scene.start('UpgradeScene', { from: 'gameover' }));
+        this.makeBtn(lx, 440, 'btn_blue', 'UPGRADES', '20px', () => this.scene.start('UpgradeScene', { from: 'gameover' }));
+        this.makeBtn(lx, 520, 'btn_large', 'PLAY AGAIN', '28px', () => this.scene.start('GameScene'));
+        this.makeBtn(lx, 600, 'btn_red', 'MENU', '18px', () => this.scene.start('MenuScene'));
 
-        // Play Again
-        this.makeBtn(GW/2, 580, 'btn_large', 'PLAY AGAIN', '28px', () => this.scene.start('GameScene'));
+        // Right column — local leaderboard
+        const rx = GW * 0.72;
+        this.add.text(rx, 100, 'TOP RUNS', {
+            fontSize: '28px', fontFamily: 'Arial Black,Arial', color: '#38B6FF',
+            stroke: '#000', strokeThickness: 3
+        }).setOrigin(0.5);
+
+        const runs = saveData.bestRuns || [];
+        if (runs.length === 0) {
+            this.add.text(rx, 160, 'No runs yet', { fontSize: '16px', fontFamily: 'Arial', color: '#666688' }).setOrigin(0.5);
+        } else {
+            runs.forEach((run, i) => {
+                const y = 150 + i * 50;
+                const medal = i === 0 ? '#FFD700' : i === 1 ? '#C0C0C0' : i === 2 ? '#CD7F32' : '#888888';
+                const isThis = run.wave === this.waveReached && run.gold === this.goldEarned;
+                this.add.text(rx - 120, y, '#' + (i + 1), {
+                    fontSize: '20px', fontFamily: 'Arial Black,Arial', color: medal
+                }).setOrigin(0, 0.5);
+                const entry = this.add.text(rx - 70, y, 'Wave ' + run.wave, {
+                    fontSize: '20px', fontFamily: 'Arial', color: isThis ? '#00FF88' : '#fff'
+                }).setOrigin(0, 0.5);
+                this.add.text(rx + 80, y, run.gold + 'g', {
+                    fontSize: '18px', fontFamily: 'Arial', color: '#FFD700'
+                }).setOrigin(0, 0.5);
+                if (isThis) {
+                    this.add.text(rx + 140, y, ' <-', {
+                        fontSize: '16px', fontFamily: 'Arial', color: '#00FF88'
+                    }).setOrigin(0, 0.5);
+                }
+            });
+        }
+
+        // Stats
+        const sy = 430;
+        this.add.text(rx, sy, 'STATS', {
+            fontSize: '22px', fontFamily: 'Arial Black,Arial', color: '#A855F7'
+        }).setOrigin(0.5);
+        const stats = [
+            'Total Runs: ' + (saveData.totalRuns || 0),
+            'Best Wave: ' + saveData.highestWave,
+            'Lifetime Gold: ' + (saveData.totalGoldEarned || 0),
+        ];
+        stats.forEach((s, i) => {
+            this.add.text(rx, sy + 32 + i * 26, s, {
+                fontSize: '16px', fontFamily: 'Arial', color: '#aaaacc'
+            }).setOrigin(0.5);
+        });
+    }
+
+    getUpgradeHook() {
+        let best = null;
+        UPGRADE_DEFS.forEach(def => {
+            const lvl = saveData.upgrades[def.key];
+            if (def.maxLevel && lvl >= def.maxLevel) return;
+            const cost = Math.floor(def.baseCost * Math.pow(def.mult, lvl));
+            const need = cost - saveData.gold;
+            if (need > 0 && (!best || need < best.need)) {
+                best = { need, name: def.name, cost };
+            }
+        });
+        if (best && best.need <= best.cost * 0.6) {
+            return { text: 'Only ' + best.need + 'g away from ' + best.name + '!' };
+        }
+        // Fallback: show next wave milestone
+        const hw = saveData.highestWave;
+        const milestones = [5, 10, 15, 20, 25, 30, 40, 50];
+        const next = milestones.find(m => m > hw);
+        if (next) return { text: 'Can you reach Wave ' + next + '?' };
+        return { text: 'You are a Blob Battalion legend!' };
     }
 
     makeBtn(x, y, tex, label, size, cb) {
