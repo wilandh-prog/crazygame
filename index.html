@@ -1,0 +1,2025 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Blob Battalion</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+    <script src="https://sdk.crazygames.com/crazygames-sdk-v3.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0f0f23;
+            overflow: hidden;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            user-select: none;
+            touch-action: none;
+        }
+        #loader {
+            position: fixed; inset: 0; z-index: 9999;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            background: #0f0f23;
+            transition: opacity 0.4s;
+        }
+        #loader.fade { opacity: 0; pointer-events: none; }
+        #loader h1 {
+            font-family: Arial Black, Arial, sans-serif;
+            font-size: 48px; color: #7ED957;
+            margin-bottom: 32px;
+            text-shadow: 0 2px 8px rgba(126,217,87,0.3);
+        }
+        #loader .bar-track {
+            width: 280px; height: 20px;
+            background: #222244;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-bottom: 16px;
+        }
+        #loader .bar-fill {
+            width: 0%; height: 100%;
+            background: linear-gradient(90deg, #7ED957, #38B6FF);
+            border-radius: 10px;
+            transition: width 0.3s ease;
+        }
+        #loader p {
+            font-family: Arial, sans-serif;
+            font-size: 16px; color: #666688;
+        }
+        /* Portrait rotation warning */
+        #rotate-warning {
+            display: none;
+            position: fixed; inset: 0; z-index: 99999;
+            background: #0a0a1a;
+            flex-direction: column;
+            align-items: center; justify-content: center;
+            text-align: center;
+        }
+        #rotate-warning .icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+            animation: rotateHint 2s ease-in-out infinite;
+        }
+        #rotate-warning p {
+            font-family: Arial Black, Arial, sans-serif;
+            color: #7ED957; font-size: 22px;
+            margin: 0 20px;
+        }
+        #rotate-warning .sub {
+            color: #666688; font-size: 14px;
+            margin-top: 10px; font-family: Arial, sans-serif;
+        }
+        @keyframes rotateHint {
+            0%, 100% { transform: rotate(0deg); }
+            25% { transform: rotate(90deg); }
+            75% { transform: rotate(90deg); }
+        }
+        @media (orientation: portrait) and (max-width: 900px) {
+            #rotate-warning { display: flex !important; }
+        }
+        @media (orientation: landscape), (min-width: 901px) {
+            #rotate-warning { display: none !important; }
+        }
+    </style>
+</head>
+<body>
+<div id="rotate-warning">
+    <div class="icon">&#128241;</div>
+    <p>Rotate your device</p>
+    <p class="sub">Blob Battalion plays best in landscape mode</p>
+</div>
+<div id="loader">
+    <h1>BLOB BATTALION</h1>
+    <div class="bar-track"><div class="bar-fill" id="loader-fill"></div></div>
+    <p id="loader-text">Loading...</p>
+</div>
+<script>
+// ============================================================
+// CONSTANTS
+// ============================================================
+const GW = 1280, GH = 720;
+const GRID_COLS = 3, GRID_ROWS = 5;
+const CELL_SIZE = 95, CELL_GAP = 10, CELL_SPACING = CELL_SIZE + CELL_GAP;
+const GRID_X = 30, GRID_Y = Math.floor((GH - GRID_ROWS * CELL_SPACING + CELL_GAP) / 2);
+const DEFENSE_X = GRID_X + GRID_COLS * CELL_SPACING + 40;
+
+// Lane centers (one per row)
+const LANE_CENTERS = [];
+for (let r = 0; r < GRID_ROWS; r++) LANE_CENTERS.push(GRID_Y + r * CELL_SPACING + CELL_SIZE / 2);
+const LANE_HEIGHT = CELL_SPACING;
+const MAX_TIER = 10;
+const BLOB_COST = 15;
+const STARTING_GOLD = 30;
+const STARTING_LIVES = 10;
+const BASE_DAMAGE = 8;
+const BASE_ATTACK_INTERVAL = 1500;
+const PROJECTILE_SPEED = 500;
+const ENEMY_BASE_HP = 30;
+const ENEMY_BASE_SPEED = 65;
+const ENEMY_BASE_REWARD = 2;
+
+const IS_MOBILE = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) || ('ontouchstart' in window && window.innerWidth < 1200);
+
+const TIER_COLORS = [
+    0x7ED957, 0x38B6FF, 0xA855F7, 0xFF914D, 0xFF4444,
+    0xFFDE59, 0x00CED1, 0xFF69B4, 0xC0C0C0, 0xFFD700
+];
+
+const UPGRADE_DEFS = [
+    { key: 'blobPower',       name: 'Blob Power',       desc: '+15% damage',       baseCost: 50,  mult: 1.6 },
+    { key: 'attackSpeed',     name: 'Attack Speed',     desc: '+8% speed',         baseCost: 75,  mult: 1.6 },
+    { key: 'goldRush',        name: 'Gold Rush',        desc: '+15% gold',         baseCost: 60,  mult: 1.6 },
+    { key: 'headStart',       name: 'Head Start',       desc: '+20 starting gold', baseCost: 100, mult: 1.5 },
+    { key: 'reinforcements',  name: 'Reinforcements',   desc: '+1 starting life',  baseCost: 150, mult: 1.7, maxLevel: 5 }
+];
+
+// ============================================================
+// SAVE DATA
+// ============================================================
+let saveData = {
+    upgrades: { blobPower: 0, attackSpeed: 0, goldRush: 0, headStart: 0, reinforcements: 0 },
+    gold: 0, highestWave: 0, totalGoldEarned: 0, tutorialDone: false
+};
+
+// ============================================================
+// SDK WRAPPER
+// ============================================================
+let sdk = null, sdkReady = false;
+
+async function initSDK() {
+    try {
+        if (window.CrazyGames && window.CrazyGames.SDK) {
+            sdk = window.CrazyGames.SDK;
+            await sdk.init();
+            sdkReady = true;
+            // Settings listener (safe to add after init)
+            try {
+                sdk.game.addSettingsChangeListener((settings) => {
+                    if (settings.muteAudio) { sfx.muted = true; if (game && game.sound) game.sound.mute = true; }
+                });
+            } catch(e) {}
+        }
+    } catch (e) { console.warn('SDK init failed:', e); }
+}
+
+function sdkCall(fn) { if (sdkReady) { try { fn(); } catch(e) { console.warn(e); } } }
+function sdkGameplayStart() { sdkCall(() => sdk.game.gameplayStart()); }
+function sdkGameplayStop()  { sdkCall(() => sdk.game.gameplayStop()); }
+function sdkLoadingStart()  { sdkCall(() => sdk.game.sdkGameLoadingStart()); }
+function sdkLoadingStop()   { sdkCall(() => sdk.game.sdkGameLoadingStop()); }
+function sdkHappyTime()     { sdkCall(() => sdk.game.happytime()); }
+
+let lastAdTime = 0;
+const MIN_AD_INTERVAL = 180000;
+
+function canShowAd() { return Date.now() - lastAdTime >= MIN_AD_INTERVAL; }
+
+function showMidgameAd(onDone) {
+    if (!canShowAd()) { if (onDone) onDone(); return; }
+    const cb = {
+        adStarted: () => { lastAdTime = Date.now(); },
+        adFinished: () => { if (onDone) onDone(); },
+        adError: () => { if (onDone) onDone(); }
+    };
+    if (sdkReady) { try { sdk.ad.requestAd('midgame', cb); } catch(e) { if (onDone) onDone(); } }
+    else { if (onDone) onDone(); }
+}
+
+function showRewardedAd(onReward, onSkip) {
+    const cb = {
+        adStarted: () => { lastAdTime = Date.now(); },
+        adFinished: () => { if (onReward) onReward(); },
+        adError: () => { if (onSkip) onSkip(); }
+    };
+    if (sdkReady) { try { sdk.ad.requestAd('rewarded', cb); } catch(e) { if (onSkip) onSkip(); } }
+    else { if (onReward) onReward(); }
+}
+
+// ============================================================
+// SAVE / LOAD
+// ============================================================
+function saveGame() {
+    const json = JSON.stringify(saveData);
+    try { if (sdkReady && sdk.data) sdk.data.setItem('saveData', json); } catch(e) {}
+    try { localStorage.setItem('blobBattalion_save', json); } catch(e) {}
+}
+
+function loadGame() {
+    let json = null;
+    try { if (sdkReady && sdk.data) json = sdk.data.getItem('saveData'); } catch(e) {}
+    if (!json) { try { json = localStorage.getItem('blobBattalion_save'); } catch(e) {} }
+    if (json) {
+        try {
+            const d = JSON.parse(json);
+            saveData = { ...saveData, ...d };
+            if (d.upgrades) saveData.upgrades = { ...saveData.upgrades, ...d.upgrades };
+        } catch(e) {}
+    }
+}
+
+// ============================================================
+// SFX (procedural Web Audio)
+// ============================================================
+class SFX {
+    constructor() {
+        this.ctx = null; this.muted = false;
+        try { this.ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {}
+    }
+    resume() { if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume(); }
+
+    play(type) {
+        if (!this.ctx || this.muted) return;
+        this.resume();
+        switch(type) {
+            case 'buy':      this.tone(520, 'sine', 0.08, 0.12); break;
+            case 'merge':    this.mergeSnd(); break;
+            case 'shoot':    this.tone(880, 'square', 0.03, 0.04); break;
+            case 'hit':      this.noise(0.03, 0.06); break;
+            case 'kill':     this.killSnd(); break;
+            case 'wave':     this.fanfare(); break;
+            case 'gameover': this.sadTones(); break;
+            case 'loselife': this.tone(180, 'sawtooth', 0.15, 0.10); break;
+        }
+    }
+
+    tone(freq, type, dur, vol) {
+        const t = this.ctx.currentTime;
+        const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+        o.connect(g); g.connect(this.ctx.destination);
+        o.type = type; o.frequency.value = freq;
+        g.gain.setValueAtTime(vol, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+        o.start(t); o.stop(t + dur + 0.01);
+    }
+
+    noise(dur, vol) {
+        const sr = this.ctx.sampleRate, n = sr * dur;
+        const buf = this.ctx.createBuffer(1, n, sr), d = buf.getChannelData(0);
+        for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * 0.5;
+        const s = this.ctx.createBufferSource(), g = this.ctx.createGain();
+        s.buffer = buf; s.connect(g); g.connect(this.ctx.destination);
+        const t = this.ctx.currentTime;
+        g.gain.setValueAtTime(vol, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+        s.start(t); s.stop(t + dur + 0.01);
+    }
+
+    mergeSnd() {
+        const t = this.ctx.currentTime;
+        const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+        o.connect(g); g.connect(this.ctx.destination);
+        o.type = 'sine';
+        o.frequency.setValueAtTime(400, t);
+        o.frequency.exponentialRampToValueAtTime(800, t + 0.12);
+        g.gain.setValueAtTime(0.12, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+        o.start(t); o.stop(t + 0.21);
+        // sparkle overtone
+        const o2 = this.ctx.createOscillator(), g2 = this.ctx.createGain();
+        o2.connect(g2); g2.connect(this.ctx.destination);
+        o2.type = 'sine'; o2.frequency.value = 1200;
+        g2.gain.setValueAtTime(0.06, t + 0.08);
+        g2.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+        o2.start(t + 0.08); o2.stop(t + 0.21);
+    }
+
+    killSnd() {
+        const t = this.ctx.currentTime;
+        const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+        o.connect(g); g.connect(this.ctx.destination);
+        o.type = 'sine';
+        o.frequency.setValueAtTime(500, t);
+        o.frequency.exponentialRampToValueAtTime(80, t + 0.12);
+        g.gain.setValueAtTime(0.12, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+        o.start(t); o.stop(t + 0.15);
+        this.noise(0.06, 0.05);
+    }
+
+    fanfare() {
+        this.tone(523, 'sine', 0.12, 0.10);
+        setTimeout(() => this.tone(659, 'sine', 0.12, 0.10), 120);
+        setTimeout(() => this.tone(784, 'sine', 0.2, 0.12), 240);
+    }
+
+    sadTones() {
+        this.tone(400, 'sine', 0.2, 0.10);
+        setTimeout(() => this.tone(300, 'sine', 0.2, 0.10), 200);
+        setTimeout(() => this.tone(200, 'sine', 0.4, 0.08), 400);
+    }
+}
+const sfx = new SFX();
+
+// ============================================================
+// BOOT SCENE
+// ============================================================
+class BootScene extends Phaser.Scene {
+    constructor() { super('BootScene'); }
+
+    setProgress(pct, label) {
+        const fill = document.getElementById('loader-fill');
+        const txt = document.getElementById('loader-text');
+        if (fill) fill.style.width = pct + '%';
+        if (txt) txt.textContent = label || 'Loading...';
+    }
+
+    async create() {
+        this.setProgress(10, 'Initializing SDK...');
+        sdkLoadingStart();
+        await initSDK();
+
+        this.setProgress(30, 'Loading save data...');
+        loadGame();
+        await new Promise(r => setTimeout(r, 80));
+
+        this.setProgress(50, 'Generating textures...');
+        await new Promise(r => setTimeout(r, 80));
+        this.genTextures();
+
+        this.setProgress(90, 'Almost ready...');
+        sdkLoadingStop();
+        await new Promise(r => setTimeout(r, 200));
+
+        this.setProgress(100, 'Ready!');
+        await new Promise(r => setTimeout(r, 300));
+        const loader = document.getElementById('loader');
+        if (loader) { loader.classList.add('fade'); setTimeout(() => loader.remove(), 500); }
+        this.scene.start('MenuScene');
+    }
+
+    genTextures() {
+        // Blob textures per tier — progressively more menacing
+        for (let t = 1; t <= MAX_TIER; t++) {
+            const g = this.make.graphics({ add: false });
+            const s = 80, cx = s/2, cy = s/2 + 2, r = 28 + t * 1.5;
+            const col = TIER_COLORS[t-1];
+
+            // Outer glow for tier 6+
+            if (t >= 6) {
+                g.fillStyle(col, 0.12 + (t-6)*0.04);
+                g.fillCircle(cx, cy, r + 6 + (t-6)*2);
+            }
+            // Spiky aura for tier 8+
+            if (t >= 8) {
+                const spikes = 5 + (t-8)*3;
+                g.fillStyle(col, 0.25);
+                for (let i = 0; i < spikes; i++) {
+                    const a = (i/spikes)*Math.PI*2 - Math.PI/2;
+                    const sLen = r + 8 + (t-8)*4;
+                    const sx = cx + Math.cos(a)*sLen, sy = cy + Math.sin(a)*sLen;
+                    g.fillTriangle(
+                        cx + Math.cos(a-0.15)*r, cy + Math.sin(a-0.15)*r,
+                        cx + Math.cos(a+0.15)*r, cy + Math.sin(a+0.15)*r,
+                        sx, sy
+                    );
+                }
+            }
+
+            // Shadow
+            g.fillStyle(0x000000, 0.2); g.fillCircle(cx+2, cy+3, r);
+            // Body
+            g.fillStyle(col); g.fillCircle(cx, cy, r);
+            // Highlight
+            g.fillStyle(0xffffff, t >= 7 ? 0.12 : 0.25);
+            g.fillCircle(cx - r*0.25, cy - r*0.3, r*0.35);
+
+            // Dark overlay for tier 8+ (makes body darker/edgier)
+            if (t >= 8) {
+                g.fillStyle(0x000000, 0.15 + (t-8)*0.05);
+                g.fillCircle(cx, cy, r);
+            }
+
+            // Horns for tier 9+
+            if (t >= 9) {
+                const hornH = 8 + (t-9)*6;
+                g.fillStyle(t === 10 ? 0xFFD700 : 0x222222);
+                g.fillTriangle(cx-12, cy-r+4, cx-8, cy-r-hornH, cx-4, cy-r+4);
+                g.fillTriangle(cx+4, cy-r+4, cx+8, cy-r-hornH, cx+12, cy-r+4);
+            }
+
+            // Eyes — get angrier with tier
+            const eyeSep = 9, eyeY = cy - 5;
+            if (t <= 3) {
+                // Friendly round eyes
+                g.fillStyle(0xffffff); g.fillCircle(cx-eyeSep, eyeY, 7); g.fillCircle(cx+eyeSep, eyeY, 7);
+                g.fillStyle(0x222222); g.fillCircle(cx-eyeSep+2, eyeY, 3.5); g.fillCircle(cx+eyeSep+2, eyeY, 3.5);
+            } else if (t <= 5) {
+                // Narrower, more focused eyes
+                g.fillStyle(0xffffff); g.fillCircle(cx-eyeSep, eyeY, 7); g.fillCircle(cx+eyeSep, eyeY, 7);
+                g.fillStyle(0x111111); g.fillCircle(cx-eyeSep+2, eyeY, 4); g.fillCircle(cx+eyeSep+2, eyeY, 4);
+                // Angry brows
+                g.lineStyle(2.5, 0x000000, 0.8);
+                g.lineBetween(cx-eyeSep-6, eyeY-8, cx-eyeSep+4, eyeY-5);
+                g.lineBetween(cx+eyeSep+6, eyeY-8, cx+eyeSep-4, eyeY-5);
+            } else if (t <= 7) {
+                // Glowing slitted eyes
+                g.fillStyle(0xffffff); g.fillCircle(cx-eyeSep, eyeY, 7); g.fillCircle(cx+eyeSep, eyeY, 7);
+                g.fillStyle(col, 0.6); g.fillCircle(cx-eyeSep, eyeY, 5.5); g.fillCircle(cx+eyeSep, eyeY, 5.5);
+                g.fillStyle(0x000000);
+                // Vertical slit pupils
+                g.fillRect(cx-eyeSep-1.5, eyeY-5, 3, 10);
+                g.fillRect(cx+eyeSep-1.5, eyeY-5, 3, 10);
+                // Heavy brows
+                g.lineStyle(3, 0x000000, 0.9);
+                g.lineBetween(cx-eyeSep-7, eyeY-7, cx-eyeSep+5, eyeY-5);
+                g.lineBetween(cx+eyeSep+7, eyeY-7, cx+eyeSep-5, eyeY-5);
+            } else {
+                // Fierce glowing eyes — red/orange inner glow
+                const eyeGlow = t === 10 ? 0xFF2200 : 0xFF4400;
+                g.fillStyle(eyeGlow, 0.4); g.fillCircle(cx-eyeSep, eyeY, 10); g.fillCircle(cx+eyeSep, eyeY, 10);
+                g.fillStyle(0xffffff); g.fillCircle(cx-eyeSep, eyeY, 6); g.fillCircle(cx+eyeSep, eyeY, 6);
+                g.fillStyle(eyeGlow); g.fillCircle(cx-eyeSep, eyeY, 4.5); g.fillCircle(cx+eyeSep, eyeY, 4.5);
+                g.fillStyle(0x000000);
+                g.fillRect(cx-eyeSep-1.5, eyeY-5, 3, 10);
+                g.fillRect(cx+eyeSep-1.5, eyeY-5, 3, 10);
+                // Thick angry brows
+                g.lineStyle(3.5, 0x000000, 1);
+                g.lineBetween(cx-eyeSep-8, eyeY-6, cx-eyeSep+5, eyeY-5);
+                g.lineBetween(cx+eyeSep+8, eyeY-6, cx+eyeSep-5, eyeY-5);
+            }
+
+            // Mouth — evolves from smile to fanged grin
+            if (t <= 2) {
+                // Gentle smile
+                g.lineStyle(2, 0x000000, 0.4);
+                g.beginPath(); g.arc(cx, cy+5, 6, 0.3, Math.PI-0.3, false); g.strokePath();
+            } else if (t <= 4) {
+                // Wider grin
+                g.lineStyle(2, 0x000000, 0.5);
+                g.beginPath(); g.arc(cx, cy+4, 8, 0.2, Math.PI-0.2, false); g.strokePath();
+            } else if (t <= 6) {
+                // Open grin with teeth
+                g.fillStyle(0x000000, 0.7);
+                g.beginPath(); g.arc(cx, cy+5, 9, 0.1, Math.PI-0.1, false); g.closePath(); g.fillPath();
+                g.fillStyle(0xffffff);
+                g.fillTriangle(cx-6, cy+5, cx-3, cy+5, cx-4.5, cy+9);
+                g.fillTriangle(cx+3, cy+5, cx+6, cy+5, cx+4.5, cy+9);
+            } else if (t <= 8) {
+                // Fanged snarl
+                g.fillStyle(0x000000, 0.8);
+                g.beginPath(); g.arc(cx, cy+4, 10, 0.05, Math.PI-0.05, false); g.closePath(); g.fillPath();
+                g.fillStyle(0xffffff);
+                g.fillTriangle(cx-8, cy+4, cx-5, cy+4, cx-6.5, cy+11);
+                g.fillTriangle(cx-2, cy+4, cx+2, cy+4, cx, cy+10);
+                g.fillTriangle(cx+5, cy+4, cx+8, cy+4, cx+6.5, cy+11);
+            } else {
+                // Massive fanged grin
+                g.fillStyle(0x000000, 0.9);
+                g.beginPath(); g.arc(cx, cy+3, 12, 0.05, Math.PI-0.05, false); g.closePath(); g.fillPath();
+                g.fillStyle(0xffffff);
+                for (let f = -3; f <= 3; f++) {
+                    const fx = cx + f * 4;
+                    const fh = (f === -2 || f === 2) ? 10 : 7;
+                    g.fillTriangle(fx-2, cy+3, fx+2, cy+3, fx, cy+3+fh);
+                }
+            }
+
+            // Crown for tier 10
+            if (t === 10) {
+                const crY = cy - r - 6;
+                g.fillStyle(0xFFD700);
+                g.fillRect(cx-14, crY, 28, 8);
+                g.fillTriangle(cx-14, crY, cx-10, crY-10, cx-6, crY);
+                g.fillTriangle(cx-4, crY, cx, crY-12, cx+4, crY);
+                g.fillTriangle(cx+6, crY, cx+10, crY-10, cx+14, crY);
+                g.fillStyle(0xFF2200); g.fillCircle(cx, crY+3, 2.5);
+            }
+
+            g.generateTexture('blob_' + t, s, s); g.destroy();
+        }
+
+        // Helper: draw spiky enemy shape
+        const drawSpiky = (g, cx, cy, points, rOuter, rInner, color) => {
+            g.fillStyle(color); g.beginPath();
+            for (let i = 0; i < points; i++) {
+                const a = (i/points)*Math.PI*2 - Math.PI/2, rad = i%2===0 ? rOuter : rInner;
+                i===0 ? g.moveTo(cx+Math.cos(a)*rad, cy+Math.sin(a)*rad) : g.lineTo(cx+Math.cos(a)*rad, cy+Math.sin(a)*rad);
+            }
+            g.closePath(); g.fillPath();
+        };
+        const drawEyes = (g, cx, cy, sep, r, eyeColor) => {
+            g.fillStyle(eyeColor || 0xFFFF00);
+            g.fillCircle(cx-sep, cy-3, r); g.fillCircle(cx+sep, cy-3, r);
+            g.fillStyle(0x000000);
+            g.fillCircle(cx-sep, cy-3, r*0.5); g.fillCircle(cx+sep, cy-3, r*0.5);
+        };
+        const drawBrows = (g, cx, cy, w, lw) => {
+            g.lineStyle(lw||2, 0x000000, 0.7);
+            g.lineBetween(cx-w,cy-10,cx-w*0.2,cy-8); g.lineBetween(cx+w,cy-10,cx+w*0.2,cy-8);
+        };
+
+        // 1. Basic enemy (red spiky)
+        let eg = this.make.graphics({ add: false }); let es = 60, ecx = es/2, ecy = es/2;
+        drawSpiky(eg, ecx, ecy, 8, 24, 16, 0xDD4444);
+        drawEyes(eg, ecx, ecy, 7, 5); drawBrows(eg, ecx, ecy, 13);
+        eg.generateTexture('enemy_basic', es, es); eg.destroy();
+
+        // 2. Fast/Scout (cyan, small, 6 points)
+        eg = this.make.graphics({ add: false }); es = 45; ecx = es/2; ecy = es/2;
+        drawSpiky(eg, ecx, ecy, 6, 18, 11, 0x22CCDD);
+        drawEyes(eg, ecx, ecy, 5, 3.5, 0xFFFFFF);
+        eg.generateTexture('enemy_fast', es, es); eg.destroy();
+
+        // 3. Tank/Brute (dark purple, large, 6 points, chunky)
+        eg = this.make.graphics({ add: false }); es = 78; ecx = es/2; ecy = es/2;
+        drawSpiky(eg, ecx, ecy, 6, 34, 28, 0x7733AA);
+        drawEyes(eg, ecx, ecy, 10, 6, 0xFF4444); drawBrows(eg, ecx, ecy, 16, 3);
+        eg.generateTexture('enemy_tank', es, es); eg.destroy();
+
+        // 4. Healer (green circle with cross)
+        eg = this.make.graphics({ add: false }); es = 55; ecx = es/2; ecy = es/2;
+        eg.fillStyle(0x33BB55); eg.fillCircle(ecx, ecy, 22);
+        eg.fillStyle(0xffffff, 0.9);
+        eg.fillRect(ecx-3, ecy-12, 6, 24); eg.fillRect(ecx-12, ecy-3, 24, 6);
+        drawEyes(eg, ecx, ecy+2, 7, 4, 0xffffff);
+        eg.generateTexture('enemy_healer', es, es); eg.destroy();
+
+        // 5. Shielded (gray with blue ring)
+        eg = this.make.graphics({ add: false }); es = 60; ecx = es/2; ecy = es/2;
+        drawSpiky(eg, ecx, ecy, 8, 22, 15, 0x888899);
+        eg.lineStyle(3, 0x4488FF, 0.8); eg.strokeCircle(ecx, ecy, 26);
+        drawEyes(eg, ecx, ecy, 7, 5, 0x4488FF);
+        eg.generateTexture('enemy_shielded', es, es); eg.destroy();
+
+        // 6. Splitter (orange diamond)
+        eg = this.make.graphics({ add: false }); es = 55; ecx = es/2; ecy = es/2;
+        drawSpiky(eg, ecx, ecy, 4, 24, 14, 0xFF8833);
+        drawEyes(eg, ecx, ecy, 6, 4);
+        eg.generateTexture('enemy_splitter', es, es); eg.destroy();
+
+        // 7. Mini (tiny splitter child)
+        eg = this.make.graphics({ add: false }); es = 30; ecx = es/2; ecy = es/2;
+        drawSpiky(eg, ecx, ecy, 4, 12, 7, 0xFFAA55);
+        eg.fillStyle(0x000000); eg.fillCircle(ecx-3, ecy-1, 2); eg.fillCircle(ecx+3, ecy-1, 2);
+        eg.generateTexture('enemy_mini', es, es); eg.destroy();
+
+        // Boss enemy (big dark red)
+        eg = this.make.graphics({ add: false }); es = 90; ecx = es/2; ecy = es/2;
+        drawSpiky(eg, ecx, ecy, 10, 38, 26, 0x991111);
+        drawEyes(eg, ecx, ecy, 12, 8, 0xFF0000); drawBrows(eg, ecx, ecy, 20, 3);
+        eg.generateTexture('enemy_boss', es, es); eg.destroy();
+
+        // 8. Juggernaut (massive dark steel, regenerates)
+        eg = this.make.graphics({ add: false }); es = 85; ecx = es/2; ecy = es/2;
+        // Body: double-layered armored look
+        eg.fillStyle(0x334455, 0.5); eg.fillCircle(ecx, ecy, 38);
+        drawSpiky(eg, ecx, ecy, 8, 36, 30, 0x556677);
+        // Armor plates
+        eg.lineStyle(3, 0x778899, 0.6); eg.strokeCircle(ecx, ecy, 28);
+        eg.lineStyle(2, 0x99AABB, 0.3); eg.strokeCircle(ecx, ecy, 22);
+        // Regen glow
+        eg.fillStyle(0x44FF88, 0.15); eg.fillCircle(ecx, ecy, 32);
+        drawEyes(eg, ecx, ecy, 10, 7, 0x44FF88); drawBrows(eg, ecx, ecy, 17, 3);
+        eg.generateTexture('enemy_juggernaut', es, es); eg.destroy();
+
+        // 9. Warper/Phase Shifter (dark purple with phase rings)
+        eg = this.make.graphics({ add: false }); es = 60; ecx = es/2; ecy = es/2;
+        // Phase rings
+        eg.lineStyle(1.5, 0xBB44FF, 0.25); eg.strokeCircle(ecx, ecy, 28);
+        eg.lineStyle(1, 0xDD66FF, 0.15); eg.strokeCircle(ecx, ecy, 24);
+        drawSpiky(eg, ecx, ecy, 6, 22, 14, 0x6622AA);
+        // Inner glow
+        eg.fillStyle(0xBB44FF, 0.2); eg.fillCircle(ecx, ecy, 14);
+        drawEyes(eg, ecx, ecy, 7, 5, 0xDD88FF);
+        eg.generateTexture('enemy_warper', es, es); eg.destroy();
+
+        // 10. Swarm Mother (dark magenta, spawns minions)
+        eg = this.make.graphics({ add: false }); es = 80; ecx = es/2; ecy = es/2;
+        eg.fillStyle(0xAA1166, 0.3); eg.fillCircle(ecx, ecy, 36);
+        drawSpiky(eg, ecx, ecy, 10, 32, 22, 0xCC2277);
+        // Egg sacs
+        eg.fillStyle(0xFF88BB, 0.5);
+        eg.fillCircle(ecx-14, ecy+10, 6); eg.fillCircle(ecx+14, ecy+10, 6); eg.fillCircle(ecx, ecy+16, 5);
+        drawEyes(eg, ecx, ecy-2, 9, 6, 0xFF4488); drawBrows(eg, ecx, ecy-2, 15, 2.5);
+        eg.generateTexture('enemy_swarm', es, es); eg.destroy();
+
+        // 11. Berserker (dark red/orange, gets faster when hurt)
+        eg = this.make.graphics({ add: false }); es = 65; ecx = es/2; ecy = es/2;
+        // Flame-like spikes
+        drawSpiky(eg, ecx, ecy, 12, 28, 18, 0xCC3300);
+        drawSpiky(eg, ecx, ecy, 12, 22, 15, 0xFF5500);
+        // Inner rage core
+        eg.fillStyle(0xFFAA00, 0.3); eg.fillCircle(ecx, ecy, 12);
+        drawEyes(eg, ecx, ecy, 8, 5, 0xFFFF00);
+        // Permanent angry brows
+        eg.lineStyle(3, 0x000000, 0.9);
+        eg.lineBetween(ecx-14, ecy-9, ecx-3, ecy-6);
+        eg.lineBetween(ecx+14, ecy-9, ecx+3, ecy-6);
+        eg.generateTexture('enemy_berserker', es, es); eg.destroy();
+
+        // 12. Titan (enormous, takes multiple lives)
+        eg = this.make.graphics({ add: false }); es = 100; ecx = es/2; ecy = es/2;
+        // Outer aura
+        eg.fillStyle(0xFF2200, 0.08); eg.fillCircle(ecx, ecy, 48);
+        // Massive spiked body
+        drawSpiky(eg, ecx, ecy, 12, 44, 34, 0x441111);
+        drawSpiky(eg, ecx, ecy, 6, 40, 34, 0x661111);
+        // Armor cracks (glowing lines)
+        eg.lineStyle(2, 0xFF4400, 0.4);
+        eg.lineBetween(ecx-15, ecy-20, ecx-5, ecy+10);
+        eg.lineBetween(ecx+10, ecy-18, ecx+2, ecy+12);
+        eg.lineBetween(ecx-8, ecy+5, ecx+12, ecy+15);
+        // Fierce eyes
+        eg.fillStyle(0xFF0000, 0.5); eg.fillCircle(ecx-14, ecy-6, 10); eg.fillCircle(ecx+14, ecy-6, 10);
+        eg.fillStyle(0xFFFF00); eg.fillCircle(ecx-14, ecy-6, 6); eg.fillCircle(ecx+14, ecy-6, 6);
+        eg.fillStyle(0xFF0000); eg.fillCircle(ecx-14, ecy-6, 3.5); eg.fillCircle(ecx+14, ecy-6, 3.5);
+        // Crown of horns
+        eg.fillStyle(0x220000);
+        eg.fillTriangle(ecx-20, ecy-30, ecx-14, ecy-44, ecx-8, ecy-30);
+        eg.fillTriangle(ecx-6, ecy-32, ecx, ecy-48, ecx+6, ecy-32);
+        eg.fillTriangle(ecx+8, ecy-30, ecx+14, ecy-44, ecx+20, ecy-30);
+        drawBrows(eg, ecx, ecy-6, 22, 3.5);
+        eg.generateTexture('enemy_titan', es, es); eg.destroy();
+
+        // Projectile
+        let pg = this.make.graphics({ add: false });
+        pg.fillStyle(0xffffff); pg.fillCircle(6,6,5);
+        pg.generateTexture('projectile', 12, 12); pg.destroy();
+
+        // Grid cell
+        let gc = this.make.graphics({ add: false });
+        gc.lineStyle(2, 0xffffff, 0.15); gc.fillStyle(0xffffff, 0.05);
+        gc.fillRoundedRect(1,1,CELL_SIZE-2,CELL_SIZE-2,8); gc.strokeRoundedRect(1,1,CELL_SIZE-2,CELL_SIZE-2,8);
+        gc.generateTexture('grid_cell', CELL_SIZE, CELL_SIZE); gc.destroy();
+
+        // Grid cell highlight
+        gc = this.make.graphics({ add: false });
+        gc.lineStyle(3, 0x00FF88, 0.6); gc.fillStyle(0x00FF88, 0.15);
+        gc.fillRoundedRect(1,1,CELL_SIZE-2,CELL_SIZE-2,8); gc.strokeRoundedRect(1,1,CELL_SIZE-2,CELL_SIZE-2,8);
+        gc.generateTexture('grid_cell_hl', CELL_SIZE, CELL_SIZE); gc.destroy();
+
+        // Buttons
+        this.genButton('btn_green', 200, 60, 0x44AA44, 0x66CC66);
+        this.genButton('btn_red',   200, 60, 0xAA4444, 0xCC6666);
+        this.genButton('btn_blue',  200, 60, 0x3366AA, 0x5588CC);
+        this.genButton('btn_large', 300, 80, 0x44AA44, 0x66CC66);
+        this.genButton('btn_wide',  260, 60, 0x3366AA, 0x5588CC);
+
+        // Small particle dot
+        let pd = this.make.graphics({ add: false });
+        pd.fillStyle(0xffffff); pd.fillCircle(4, 4, 4);
+        pd.generateTexture('particle', 8, 8); pd.destroy();
+    }
+
+    genButton(key, w, h, fill, stroke) {
+        const g = this.make.graphics({ add: false });
+        g.fillStyle(fill); g.fillRoundedRect(0,0,w,h,12);
+        g.lineStyle(2, stroke); g.strokeRoundedRect(0,0,w,h,12);
+        g.generateTexture(key, w, h); g.destroy();
+    }
+}
+
+// ============================================================
+// SHARED SPACE BACKGROUND
+// ============================================================
+function drawSpaceBackground(scene, isGame) {
+    const bg = scene.add.graphics().setDepth(0);
+
+    // Deep gradient base
+    const bands = 20;
+    for (let i = 0; i < bands; i++) {
+        const t = i / bands;
+        const r = Math.floor(10 + t * 6), g2 = Math.floor(10 + t * 4), b2 = Math.floor(26 + t * 10);
+        bg.fillStyle(Phaser.Display.Color.GetColor(r, g2, b2), 1);
+        bg.fillRect(0, (GH / bands) * i, GW, GH / bands + 1);
+    }
+
+    // Nebula clouds (large soft colored blobs)
+    const nebula = scene.add.graphics().setDepth(0);
+    const nebulae = [
+        { x: 200,  y: 150,  r: 220, color: 0x4422AA, a: 0.04 },
+        { x: 900,  y: 500,  r: 280, color: 0xAA2244, a: 0.035 },
+        { x: 1100, y: 120,  r: 180, color: 0x2244AA, a: 0.04 },
+        { x: 500,  y: 600,  r: 200, color: 0x22AA66, a: 0.025 },
+        { x: 700,  y: 300,  r: 250, color: 0x6622BB, a: 0.03 },
+    ];
+    nebulae.forEach(n => {
+        // Layered circles for soft cloud effect
+        const nebulaLayers = IS_MOBILE ? 2 : 5;
+        for (let layer = 0; layer < nebulaLayers; layer++) {
+            const lr = n.r * (1 - layer * 0.15);
+            const ox = (Math.random() - 0.5) * n.r * 0.3;
+            const oy = (Math.random() - 0.5) * n.r * 0.3;
+            nebula.fillStyle(n.color, n.a * (1 - layer * 0.15));
+            nebula.fillCircle(n.x + ox, n.y + oy, lr);
+        }
+    });
+
+    // Dim background star field (tiny distant stars)
+    const stars = scene.add.graphics().setDepth(0);
+    const starCount = IS_MOBILE ? 60 : 150;
+    for (let i = 0; i < starCount; i++) {
+        const a = 0.03 + Math.random() * 0.12;
+        const sr = 0.3 + Math.random() * 0.8;
+        stars.fillStyle(0xffffff, a);
+        stars.fillCircle(Math.random() * GW, Math.random() * GH, sr);
+    }
+
+    // Mid-layer stars (colored, slightly bigger)
+    const midStarCount = IS_MOBILE ? 15 : 40;
+    for (let i = 0; i < midStarCount; i++) {
+        const tints = [0xffffff, 0xAABBFF, 0xFFDDAA, 0xFFAAAA, 0xAAFFEE];
+        const col = tints[Math.floor(Math.random() * tints.length)];
+        const a = 0.1 + Math.random() * 0.2;
+        const sr = 0.5 + Math.random() * 1.2;
+        stars.fillStyle(col, a);
+        stars.fillCircle(Math.random() * GW, Math.random() * GH, sr);
+    }
+
+    // Bright twinkling stars (animated)
+    const twinkleStars = [];
+    const twinkleCount = IS_MOBILE ? 5 : 12;
+    for (let i = 0; i < twinkleCount; i++) {
+        const sx = Phaser.Math.Between(30, GW - 30);
+        const sy = Phaser.Math.Between(20, GH - 20);
+        const sr = 1 + Math.random() * 1.5;
+        const tints = [0xffffff, 0xAABBFF, 0xFFEECC];
+        const col = tints[Math.floor(Math.random() * tints.length)];
+        const star = scene.add.graphics().setDepth(0);
+        // 4-point sparkle shape
+        star.fillStyle(col, 0.5);
+        star.fillCircle(0, 0, sr);
+        star.fillRect(-sr * 2.5, -0.5, sr * 5, 1);
+        star.fillRect(-0.5, -sr * 2.5, 1, sr * 5);
+        star.x = sx; star.y = sy;
+        scene.tweens.add({
+            targets: star, alpha: 0.15 + Math.random() * 0.2,
+            duration: 800 + Math.random() * 1500, yoyo: true, repeat: -1,
+            ease: 'Sine.easeInOut', delay: Math.random() * 2000
+        });
+        twinkleStars.push(star);
+    }
+
+    // Distant planet/moon
+    const planet = scene.add.graphics().setDepth(0);
+    const px = isGame ? 1150 : 1050, py = isGame ? 90 : 580, pr = 35;
+    // Planet shadow
+    planet.fillStyle(0x000000, 0.15); planet.fillCircle(px + 2, py + 2, pr);
+    // Planet body
+    planet.fillStyle(0x334466, 0.3); planet.fillCircle(px, py, pr);
+    // Lit crescent
+    planet.fillStyle(0x5577AA, 0.2); planet.fillCircle(px - 8, py - 5, pr * 0.85);
+    // Atmosphere rim
+    planet.lineStyle(1.5, 0x6688BB, 0.15); planet.strokeCircle(px, py, pr + 3);
+
+    // Shooting stars (periodic)
+    scene.time.addEvent({
+        delay: IS_MOBILE ? 6000 + Math.random() * 5000 : 3000 + Math.random() * 4000,
+        loop: true,
+        callback: () => {
+            const sx = Phaser.Math.Between(200, GW);
+            const sy = Phaser.Math.Between(0, GH * 0.4);
+            const streak = scene.add.graphics().setDepth(1);
+            streak.x = sx; streak.y = sy;
+            streak.lineStyle(1.5, 0xffffff, 0.6);
+            streak.lineBetween(0, 0, -40, 15);
+            streak.fillStyle(0xffffff, 0.8);
+            streak.fillCircle(0, 0, 1.5);
+            scene.tweens.add({
+                targets: streak, x: sx - 250, y: sy + 100, alpha: 0,
+                duration: 600 + Math.random() * 400, ease: 'Quad.easeIn',
+                onComplete: () => streak.destroy()
+            });
+        }
+    });
+
+    // Ambient floating particles
+    scene.add.particles(0, 0, 'particle', {
+        x: { min: 0, max: GW }, y: { min: 0, max: GH },
+        scale: { start: 0.12, end: 0 },
+        alpha: { start: 0.15, end: 0 },
+        speed: { min: 3, max: 15 },
+        angle: { min: 260, max: 280 },
+        lifespan: 5000,
+        frequency: IS_MOBILE ? 800 : 400,
+        tint: [0x7ED957, 0x38B6FF, 0xA855F7, 0xFFD700, 0x4422AA],
+        depth: 1
+    });
+}
+
+// ============================================================
+// MENU SCENE
+// ============================================================
+class MenuScene extends Phaser.Scene {
+    constructor() { super('MenuScene'); }
+
+    create() {
+        this.cameras.main.setBackgroundColor('#0a0a1a');
+        drawSpaceBackground(this);
+
+        // Decorative blobs
+        for (let i = 0; i < 8; i++) {
+            const b = this.add.image(
+                Phaser.Math.Between(80, GW-80),
+                Phaser.Math.Between(40, GH-40),
+                'blob_' + Phaser.Math.Between(1,7)
+            ).setAlpha(0.15).setScale(0.5 + Math.random()*0.5);
+            this.tweens.add({ targets: b, y: b.y+12, duration: 1500+Math.random()*1000, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+        }
+
+        // Title with pop-in animation
+        const title = this.add.text(GW/2, 160, 'BLOB BATTALION', {
+            fontSize: '72px', fontFamily: 'Arial Black,Arial', color: '#7ED957',
+            stroke: '#000000', strokeThickness: 6
+        }).setOrigin(0.5).setScale(0);
+        this.tweens.add({ targets: title, scaleX: 1, scaleY: 1, duration: 500, ease: 'Back.easeOut' });
+
+        this.add.text(GW/2, 240, 'Merge \u2022 Defend \u2022 Conquer', {
+            fontSize: '24px', fontFamily: 'Arial', color: '#aaaacc'
+        }).setOrigin(0.5);
+
+        if (saveData.highestWave > 0) {
+            this.add.text(GW/2, 300, 'Best: Wave ' + saveData.highestWave, {
+                fontSize: '22px', fontFamily: 'Arial', color: '#FFD700'
+            }).setOrigin(0.5);
+        }
+        if (saveData.gold > 0) {
+            this.add.text(GW/2, 335, 'Gold: ' + saveData.gold, {
+                fontSize: '20px', fontFamily: 'Arial', color: '#FFD700'
+            }).setOrigin(0.5);
+        }
+
+        // Play button
+        this.makeBtn(GW/2, 430, 'btn_large', 'PLAY', '36px', () => this.scene.start('GameScene'));
+
+        // Upgrades button
+        if (saveData.gold > 0) {
+            this.makeBtn(GW/2, 530, 'btn_blue', 'UPGRADES', '22px', () => this.scene.start('UpgradeScene', { from: 'menu' }));
+        }
+
+    }
+
+    makeBtn(x, y, tex, label, size, cb) {
+        const btn = this.add.image(x, y, tex).setInteractive({ useHandCursor: true });
+        const lbl = this.add.text(x, y, label, { fontSize: size, fontFamily: 'Arial Black,Arial', color: '#fff' }).setOrigin(0.5);
+        btn.on('pointerover', () => { btn.setTint(0xdddddd); this.tweens.add({ targets: [btn, lbl], scaleX: 1.05, scaleY: 1.05, duration: 100, ease: 'Quad.easeOut' }); });
+        btn.on('pointerout', () => { btn.clearTint(); this.tweens.add({ targets: [btn, lbl], scaleX: 1, scaleY: 1, duration: 100 }); });
+        btn.on('pointerdown', () => { sfx.play('buy'); cb(); });
+        return btn;
+    }
+}
+
+// ============================================================
+// GAME SCENE
+// ============================================================
+class GameScene extends Phaser.Scene {
+    constructor() { super('GameScene'); }
+
+    init() {
+        const u = saveData.upgrades;
+        this.gold = STARTING_GOLD + u.headStart * 20;
+        this.lives = STARTING_LIVES + u.reinforcements;
+        this.currentWave = 0;
+        this.runGold = 0;
+        this.grid = [];
+        this.waveState = 'PRE_WAVE';
+        this.enemiesAlive = 0;
+        this.enemiesSpawned = 0;
+        this.enemiesToSpawn = 0;
+        this.spawnTimer = 0;
+        this.waveDelayTimer = 0;
+        this.isDragging = false;
+        this.dragBlob = null;
+        this.dragStartCell = null;
+        this.isGameOver = false;
+        this.isPaused = false;
+        this.purchaseCount = 0;
+        this.tutStep = saveData.tutorialDone ? -1 : 0;
+    }
+
+    create() {
+        this.cameras.main.setBackgroundColor('#0a0a1a');
+        drawSpaceBackground(this, true);
+
+        // Lane strips (alternating tint across battle area)
+        const laneGfx = this.add.graphics().setDepth(0);
+        for (let r = 0; r < GRID_ROWS; r++) {
+            const ly = GRID_Y + r * CELL_SPACING;
+            laneGfx.fillStyle(r % 2 === 0 ? 0xffffff : 0x7ED957, 0.02);
+            laneGfx.fillRect(DEFENSE_X, ly, GW - DEFENSE_X, CELL_SIZE);
+            if (r > 0) {
+                laneGfx.lineStyle(1, 0xffffff, 0.06);
+                laneGfx.lineBetween(DEFENSE_X, ly - CELL_GAP/2, GW, ly - CELL_GAP/2);
+            }
+        }
+
+        // Init grid array
+        for (let r = 0; r < GRID_ROWS; r++) {
+            this.grid[r] = [];
+            for (let c = 0; c < GRID_COLS; c++) this.grid[r][c] = null;
+        }
+
+        // Draw grid cells
+        this.gridCells = []; this.gridHLs = [];
+        for (let r = 0; r < GRID_ROWS; r++) {
+            this.gridCells[r] = []; this.gridHLs[r] = [];
+            for (let c = 0; c < GRID_COLS; c++) {
+                const x = GRID_X + c*CELL_SPACING + CELL_SIZE/2;
+                const y = GRID_Y + r*CELL_SPACING + CELL_SIZE/2;
+                this.gridCells[r][c] = this.add.image(x, y, 'grid_cell');
+                this.gridHLs[r][c] = this.add.image(x, y, 'grid_cell_hl').setVisible(false);
+            }
+        }
+
+        // Defense line (dashed)
+        const dl = this.add.graphics();
+        dl.lineStyle(2, 0xFF4444, 0.25);
+        for (let y = 80; y < GH; y += 20) dl.lineBetween(DEFENSE_X, y, DEFENSE_X, y+10);
+
+        // Physics groups
+        this.enemies = this.physics.add.group();
+        this.projectiles = this.physics.add.group();
+        this.physics.add.overlap(this.projectiles, this.enemies, this.onProjHit, null, this);
+
+        // HUD
+        this.waveText = this.add.text(30, 20, 'Wave 1', { fontSize: '28px', fontFamily: 'Arial Black,Arial', color: '#fff' });
+        this.goldText = this.add.text(GW/2, 20, 'Gold: ' + this.gold, { fontSize: '24px', fontFamily: 'Arial', color: '#FFD700' }).setOrigin(0.5, 0);
+        this.livesText = this.add.text(GW-30, 20, 'Lives: ' + this.lives, { fontSize: '24px', fontFamily: 'Arial', color: '#FF6666' }).setOrigin(1, 0);
+        this.waveBanner = this.add.text(GW/2, GH/2-50, '', { fontSize: '48px', fontFamily: 'Arial Black,Arial', color: '#fff', stroke: '#000', strokeThickness: 4 }).setOrigin(0.5).setAlpha(0).setDepth(100);
+
+        // Buy button (below grid)
+        const bx = GRID_X + (GRID_COLS * CELL_SPACING - CELL_GAP) / 2;
+        const by = GRID_Y + GRID_ROWS * CELL_SPACING + 25;
+        this.buyBtn = this.add.image(bx, by, 'btn_green').setInteractive({ useHandCursor: true });
+        this.buyBtnTxt = this.add.text(bx, by, 'BUY: '+this.blobCost()+'g', { fontSize: '18px', fontFamily: 'Arial Black,Arial', color: '#fff' }).setOrigin(0.5);
+        this.buyBtn.on('pointerdown', () => this.buyBlob());
+        this.buyBtn.on('pointerover', () => { if (this.canBuy()) this.buyBtn.setTint(0xccffcc); });
+        this.buyBtn.on('pointerout', () => this.buyBtn.clearTint());
+
+        // Pause button (top right, next to lives)
+        const pauseSize = IS_MOBILE ? '32px' : '24px';
+        const pausePad = IS_MOBILE ? { x: 14, y: 8 } : { x: 10, y: 4 };
+        this.pauseBtn = this.add.text(GW - 20, 54, '| |', {
+            fontSize: pauseSize, fontFamily: 'Arial Black,Arial', color: '#aaaacc',
+            backgroundColor: '#222244', padding: pausePad
+        }).setOrigin(1, 0).setDepth(90).setInteractive({ useHandCursor: true });
+        this.pauseBtn.on('pointerover', () => this.pauseBtn.setColor('#ffffff'));
+        this.pauseBtn.on('pointerout', () => this.pauseBtn.setColor('#aaaacc'));
+        this.pauseBtn.on('pointerdown', () => this.togglePause());
+
+        // Pause overlay (hidden initially)
+        this.pauseOverlay = this.add.graphics().setDepth(200);
+        this.pauseOverlay.fillStyle(0x000000, 0.65);
+        this.pauseOverlay.fillRect(0, 0, GW, GH);
+        this.pauseOverlay.setVisible(false);
+        // Make overlay intercept clicks so gameplay doesn't receive input while paused
+        this.pauseHitZone = this.add.zone(GW/2, GH/2, GW, GH).setDepth(201).setInteractive().setVisible(false);
+
+        this.pauseTitle = this.add.text(GW/2, GH/2 - 80, 'PAUSED', {
+            fontSize: '64px', fontFamily: 'Arial Black,Arial', color: '#ffffff',
+            stroke: '#000000', strokeThickness: 5
+        }).setOrigin(0.5).setDepth(202).setVisible(false);
+
+        this.resumeBtn = this.add.image(GW/2, GH/2 + 20, 'btn_large').setDepth(202).setInteractive({ useHandCursor: true }).setVisible(false);
+        this.resumeBtnTxt = this.add.text(GW/2, GH/2 + 20, 'RESUME', {
+            fontSize: '32px', fontFamily: 'Arial Black,Arial', color: '#fff'
+        }).setOrigin(0.5).setDepth(203).setVisible(false);
+        this.resumeBtn.on('pointerover', () => this.resumeBtn.setTint(0xdddddd));
+        this.resumeBtn.on('pointerout', () => this.resumeBtn.clearTint());
+        this.resumeBtn.on('pointerdown', () => this.togglePause());
+
+        this.menuBtn = this.add.image(GW/2, GH/2 + 110, 'btn_red').setDepth(202).setInteractive({ useHandCursor: true }).setVisible(false);
+        this.menuBtnTxt = this.add.text(GW/2, GH/2 + 110, 'QUIT TO MENU', {
+            fontSize: '18px', fontFamily: 'Arial Black,Arial', color: '#fff'
+        }).setOrigin(0.5).setDepth(203).setVisible(false);
+        this.menuBtn.on('pointerover', () => this.menuBtn.setTint(0xdddddd));
+        this.menuBtn.on('pointerout', () => this.menuBtn.clearTint());
+        this.menuBtn.on('pointerdown', () => {
+            this.isPaused = false;
+            this.physics.resume();
+            this.tweens.resumeAll();
+            sdkGameplayStop();
+            this.scene.start('MenuScene');
+        });
+
+        // Drag input
+        this.setupDrag();
+
+        // Tutorial
+        if (this.tutStep >= 0) this.showTutorial();
+
+        // Start
+        this.waveDelayTimer = 2500;
+        this.waveState = 'PRE_WAVE';
+        sdkGameplayStart();
+    }
+
+    togglePause() {
+        if (this.isGameOver) return;
+        this.isPaused = !this.isPaused;
+        if (this.isPaused) {
+            this.physics.pause();
+            this.tweens.pauseAll();
+            sdkGameplayStop();
+            this.pauseOverlay.setVisible(true);
+            this.pauseHitZone.setVisible(true);
+            this.pauseTitle.setVisible(true);
+            this.resumeBtn.setVisible(true);
+            this.resumeBtnTxt.setVisible(true);
+            this.menuBtn.setVisible(true);
+            this.menuBtnTxt.setVisible(true);
+        } else {
+            this.physics.resume();
+            this.tweens.resumeAll();
+            sdkGameplayStart();
+            this.pauseOverlay.setVisible(false);
+            this.pauseHitZone.setVisible(false);
+            this.pauseTitle.setVisible(false);
+            this.resumeBtn.setVisible(false);
+            this.resumeBtnTxt.setVisible(false);
+            this.menuBtn.setVisible(false);
+            this.menuBtnTxt.setVisible(false);
+        }
+    }
+
+    // ---- DRAG & MERGE ----
+
+    setupDrag() {
+        this.input.on('pointerdown', (p) => {
+            if (this.isGameOver || this.isPaused) return;
+            const cell = this.cellAt(p.x, p.y);
+            if (!cell) return;
+            const blob = this.grid[cell.r][cell.c];
+            if (!blob) return;
+            this.isDragging = true;
+            this.dragBlob = blob;
+            this.dragStartCell = cell;
+            blob.setDepth(50);
+            blob._ox = blob.x; blob._oy = blob.y;
+            this.showHighlights(blob.getData('tier'));
+        });
+
+        this.input.on('pointermove', (p) => {
+            if (!this.isDragging || !this.dragBlob) return;
+            // On mobile, offset upward so finger doesn't cover the blob
+            const yOff = IS_MOBILE ? -50 : 0;
+            this.dragBlob.x = p.x;
+            this.dragBlob.y = p.y + yOff;
+            if (this.dragBlob._tierTxt) { this.dragBlob._tierTxt.x = p.x; this.dragBlob._tierTxt.y = p.y + yOff + 28; }
+        });
+
+        this.input.on('pointerup', (p) => {
+            if (!this.isDragging || !this.dragBlob) return;
+            this.handleDrop(p);
+            this.isDragging = false;
+            this.dragBlob = null;
+            this.dragStartCell = null;
+            this.hideHighlights();
+        });
+    }
+
+    handleDrop(p) {
+        const blob = this.dragBlob;
+        const sc = this.dragStartCell;
+        const dc = this.cellAt(p.x, p.y);
+
+        if (!dc || (dc.r === sc.r && dc.c === sc.c)) {
+            this.returnBlob(blob); return;
+        }
+
+        const target = this.grid[dc.r][dc.c];
+        if (target && target.getData('tier') === blob.getData('tier') && blob.getData('tier') < MAX_TIER) {
+            this.mergeBlobs(blob, target, sc, dc);
+        } else if (!target) {
+            this.moveBlob(blob, sc, dc);
+        } else {
+            this.swapBlobs(blob, target, sc, dc);
+        }
+    }
+
+    returnBlob(blob) {
+        blob.x = blob._ox; blob.y = blob._oy;
+        if (blob._tierTxt) { blob._tierTxt.x = blob._ox; blob._tierTxt.y = blob._oy + 28; }
+        blob.setDepth(10);
+    }
+
+    swapBlobs(a, b, cellA, cellB) {
+        // Move A to B's cell
+        const bx = GRID_X + cellB.c*CELL_SPACING + CELL_SIZE/2;
+        const by = GRID_Y + cellB.r*CELL_SPACING + CELL_SIZE/2;
+        a.x = bx; a.y = by; a._ox = bx; a._oy = by;
+        a.setData('gr', cellB.r); a.setData('gc', cellB.c);
+        if (a._tierTxt) { a._tierTxt.x = bx; a._tierTxt.y = by + 28; }
+        a.setDepth(10);
+
+        // Move B to A's cell
+        const ax = GRID_X + cellA.c*CELL_SPACING + CELL_SIZE/2;
+        const ay = GRID_Y + cellA.r*CELL_SPACING + CELL_SIZE/2;
+        b.setData('gr', cellA.r); b.setData('gc', cellA.c);
+        b._ox = ax; b._oy = ay;
+        if (b._tierTxt) { b._tierTxt.x = ax; b._tierTxt.y = ay + 28; }
+        this.tweens.add({ targets: b, x: ax, y: ay, duration: 150, ease: 'Quad.easeOut' });
+
+        // Update grid
+        this.grid[cellA.r][cellA.c] = b;
+        this.grid[cellB.r][cellB.c] = a;
+    }
+
+    moveBlob(blob, from, to) {
+        this.grid[from.r][from.c] = null;
+        this.grid[to.r][to.c] = blob;
+        const nx = GRID_X + to.c*CELL_SPACING + CELL_SIZE/2;
+        const ny = GRID_Y + to.r*CELL_SPACING + CELL_SIZE/2;
+        blob.x = nx; blob.y = ny; blob._ox = nx; blob._oy = ny;
+        blob.setData('gr', to.r); blob.setData('gc', to.c);
+        if (blob._tierTxt) { blob._tierTxt.x = nx; blob._tierTxt.y = ny + 28; }
+        blob.setDepth(10);
+    }
+
+    mergeBlobs(src, tgt, sc, dc) {
+        const newTier = src.getData('tier') + 1;
+        this.grid[sc.r][sc.c] = null;
+        if (src._tierTxt) src._tierTxt.destroy();
+        src.destroy();
+
+        tgt.setTexture('blob_' + newTier);
+        tgt.setData('tier', newTier);
+        tgt.setData('dmg', this.blobDmg(newTier));
+        tgt.setData('atkInt', this.blobAtkInt(newTier));
+        if (tgt._tierTxt) tgt._tierTxt.setText('T' + newTier);
+        tgt.setDepth(10);
+
+        this.tweens.add({ targets: tgt, scaleX: 1.3, scaleY: 1.3, duration: 150, yoyo: true, ease: 'Back.easeOut' });
+        this.burst(tgt.x, tgt.y, TIER_COLORS[newTier - 1], 14);
+        this.shake(0.003, 80);
+        sfx.play('merge');
+
+        if (this.tutStep === 2) {
+            this.tutStep = -1;
+            saveData.tutorialDone = true; saveGame();
+            if (this.tutText) this.tweens.add({ targets: this.tutText, alpha: 0, duration: 500, onComplete: () => { if (this.tutText) { this.tutText.destroy(); this.tutText = null; } } });
+        }
+    }
+
+    // ---- BUYING ----
+
+    blobCost() { return BLOB_COST + this.purchaseCount * 3; }
+
+    canBuy() { return this.gold >= this.blobCost() && this.emptyCells().length > 0; }
+
+    emptyCells() {
+        const arr = [];
+        for (let r = 0; r < GRID_ROWS; r++)
+            for (let c = 0; c < GRID_COLS; c++)
+                if (!this.grid[r][c]) arr.push({ r, c });
+        return arr;
+    }
+
+    buyBlob() {
+        if (this.isPaused || !this.canBuy()) return;
+        this.gold -= this.blobCost();
+        this.purchaseCount++;
+        sfx.play('buy');
+        const cells = this.emptyCells();
+        const cell = cells[Math.floor(Math.random() * cells.length)];
+        this.createBlob(1, cell.r, cell.c);
+
+        if (this.tutStep === 0) { this.tutStep = 1; this.updateTut(); }
+        else if (this.tutStep === 1) { this.tutStep = 2; this.updateTut(); }
+    }
+
+    createBlob(tier, r, c) {
+        const x = GRID_X + c*CELL_SPACING + CELL_SIZE/2;
+        const y = GRID_Y + r*CELL_SPACING + CELL_SIZE/2;
+        const blob = this.add.image(x, y, 'blob_' + tier).setDepth(10);
+        blob.setData('tier', tier);
+        blob.setData('gr', r); blob.setData('gc', c);
+        blob.setData('dmg', this.blobDmg(tier));
+        blob.setData('atkInt', this.blobAtkInt(tier));
+        blob.setData('atkTimer', 0);
+        blob._ox = x; blob._oy = y;
+
+        const tt = this.add.text(x, y+28, 'T'+tier, {
+            fontSize: '14px', fontFamily: 'Arial', color: '#fff', stroke: '#000', strokeThickness: 2
+        }).setOrigin(0.5).setDepth(11);
+        blob._tierTxt = tt;
+        this.grid[r][c] = blob;
+
+        blob.setScale(0);
+        this.tweens.add({ targets: blob, scaleX: 1, scaleY: 1, duration: 300, ease: 'Back.easeOut', onComplete: () => {
+            // Idle breathing animation
+            this.tweens.add({ targets: blob, scaleX: 1.06, scaleY: 0.94, duration: 700 + Math.random()*300, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+        }});
+        return blob;
+    }
+
+    blobDmg(tier) { return Math.floor(BASE_DAMAGE * tier * (1 + saveData.upgrades.blobPower * 0.15)); }
+    blobAtkInt(tier) { return Math.max(400, BASE_ATTACK_INTERVAL * (1 - saveData.upgrades.attackSpeed * 0.08) * (1 - tier * 0.03)); }
+
+    // ---- GRID HELPERS ----
+
+    cellAt(px, py) {
+        // On mobile, extend hit area into the gap for easier tapping
+        const pad = IS_MOBILE ? CELL_GAP : 0;
+        const c = Math.floor((px - GRID_X + pad/2) / CELL_SPACING);
+        const r = Math.floor((py - GRID_Y + pad/2) / CELL_SPACING);
+        if (c < 0 || c >= GRID_COLS || r < 0 || r >= GRID_ROWS) return null;
+        return { r, c };
+    }
+
+    showHighlights(tier) {
+        for (let r = 0; r < GRID_ROWS; r++) for (let c = 0; c < GRID_COLS; c++) {
+            const b = this.grid[r][c];
+            if (b && b.getData('tier') === tier && b !== this.dragBlob) {
+                this.gridHLs[r][c].setVisible(true).setAlpha(1);
+            } else if (!b) {
+                this.gridHLs[r][c].setVisible(true).setAlpha(0.3);
+            }
+        }
+    }
+
+    hideHighlights() {
+        for (let r = 0; r < GRID_ROWS; r++) for (let c = 0; c < GRID_COLS; c++)
+            this.gridHLs[r][c].setVisible(false).setAlpha(1);
+    }
+
+    // ---- WAVE SYSTEM ----
+
+    update(time, delta) {
+        if (this.isGameOver || this.isPaused) return;
+        this.updateWave(delta);
+        this.updateAttacks(delta);
+        this.updateProjectiles();
+        this.updateEnemies();
+        this.updateHUD();
+    }
+
+    updateWave(dt) {
+        switch (this.waveState) {
+            case 'PRE_WAVE':
+                this.waveDelayTimer -= dt;
+                if (this.waveDelayTimer <= 0) this.startWave();
+                break;
+            case 'SPAWNING':
+                this.spawnTimer -= dt;
+                if (this.spawnTimer <= 0 && this.enemiesSpawned < this.enemiesToSpawn) {
+                    this.spawnEnemy();
+                    this.enemiesSpawned++;
+                    // Spawn faster at higher waves
+                    const spawnDelay = Math.max(250, 700 - this.currentWave * 18) + Math.random() * Math.max(150, 600 - this.currentWave * 15);
+                    this.spawnTimer = spawnDelay;
+                }
+                if (this.enemiesSpawned >= this.enemiesToSpawn) this.waveState = 'FIGHTING';
+                break;
+            case 'FIGHTING':
+                if (this.enemiesAlive <= 0) this.waveComplete();
+                break;
+            case 'WAVE_DONE':
+                this.waveDelayTimer -= dt;
+                if (this.waveDelayTimer <= 0) { this.waveState = 'PRE_WAVE'; this.waveDelayTimer = 1000; }
+                break;
+        }
+    }
+
+    startWave() {
+        this.currentWave++;
+        // Enemy count scales quadratically after wave 10
+        const w = this.currentWave;
+        this.enemiesToSpawn = 3 + w * 2 + (w > 10 ? Math.floor((w - 10) * 1.5) : 0);
+        if (w % 5 === 0) this.enemiesToSpawn += 3 + Math.floor(w / 5);
+        this.enemiesSpawned = 0;
+        this.spawnTimer = 300;
+        this.waveState = 'SPAWNING';
+        this.showBanner('Wave ' + this.currentWave);
+    }
+
+    pickEnemyType() {
+        const w = this.currentWave;
+        const pool = ['basic','basic'];
+        if (w >= 3)  pool.push('fast','fast');
+        if (w >= 6)  pool.push('tank');
+        if (w >= 9)  pool.push('shielded');
+        if (w >= 12) pool.push('healer');
+        if (w >= 15) pool.push('splitter');
+        // Mid-game: ramp up dangerous types
+        if (w >= 10) pool.push('fast','tank','shielded');
+        if (w >= 16) pool.push('tank','healer','splitter');
+        // Late-game: flood with tough enemies, basics thin out
+        if (w >= 20) pool.push('tank','tank','shielded','shielded','healer','splitter','splitter');
+        if (w >= 25) pool.push('tank','shielded','healer','splitter');
+        // High-tier enemies — demand powerful blobs
+        if (w >= 18) pool.push('berserker','berserker');
+        if (w >= 22) pool.push('warper','warper');
+        if (w >= 25) pool.push('juggernaut');
+        if (w >= 28) pool.push('swarm','berserker','warper','juggernaut');
+        if (w >= 30) pool.push('titan');
+        if (w >= 35) pool.push('titan','juggernaut','swarm','swarm','berserker','berserker');
+        if (w >= 40) pool.push('titan','titan','juggernaut','juggernaut');
+        return pool[Math.floor(Math.random() * pool.length)];
+    }
+
+    spawnEnemy() {
+        const isBoss = (this.currentWave % 5 === 0) && (this.enemiesSpawned === this.enemiesToSpawn - 1);
+        const type = isBoss ? 'boss' : this.pickEnemyType();
+        const lane = Phaser.Math.Between(0, GRID_ROWS - 1);
+        this.createEnemy(type, lane, false);
+    }
+
+    createEnemy(type, lane, isMini) {
+        const x = GW + 50;
+        const y = LANE_CENTERS[lane] + Phaser.Math.Between(-12, 12);
+
+        // Type definitions: [texture, hpMult, spdMult, rewardMult]
+        const TYPES = {
+            basic:      ['enemy_basic',      1,    1,    1   ],
+            fast:       ['enemy_fast',       0.4,  1.9,  0.7 ],
+            tank:       ['enemy_tank',       3.5,  0.5,  1.8 ],
+            healer:     ['enemy_healer',     1.2,  0.7,  1.5 ],
+            shielded:   ['enemy_shielded',   1,    0.85, 1.3 ],
+            splitter:   ['enemy_splitter',   1.5,  0.9,  1.4 ],
+            mini:       ['enemy_mini',       0.25, 1.6,  0.3 ],
+            boss:       ['enemy_boss',       5,    0.6,  3   ],
+            juggernaut: ['enemy_juggernaut', 8,    0.35, 4   ],
+            warper:     ['enemy_warper',     2,    1.1,  2.5 ],
+            swarm:      ['enemy_swarm',      4,    0.55, 3.5 ],
+            berserker:  ['enemy_berserker',  2.5,  0.8,  2   ],
+            titan:      ['enemy_titan',      15,   0.25, 6   ],
+        };
+        const def = TYPES[type] || TYPES.basic;
+
+        const enemy = this.physics.add.image(x, y, def[0]);
+        this.enemies.add(enemy);
+
+        const w = this.currentWave;
+        // HP: steeper exponential + extra scaling after wave 15
+        const baseHp = Math.floor(ENEMY_BASE_HP * Math.pow(1.16, w) * (1 + Math.max(0, w - 15) * 0.08));
+        const hp = Math.floor(baseHp * def[1]);
+        // Speed: higher cap, accelerates in later waves
+        const spd = Math.min(ENEMY_BASE_SPEED + w * 2 + (w > 12 ? (w - 12) * 1.5 : 0), 200) * def[2];
+        const reward = Math.floor((ENEMY_BASE_REWARD + this.currentWave * 0.8) * def[3]);
+
+        enemy.setData('hp', hp); enemy.setData('maxHp', hp);
+        enemy.setData('spd', spd); enemy.setData('reward', reward);
+        enemy.setData('lane', lane); enemy.setData('type', type);
+        enemy.setVelocityX(-spd);
+        enemy.setDepth(20);
+
+        // Shield for shielded type
+        if (type === 'shielded') {
+            enemy.setData('shield', Math.floor(hp * 0.6));
+            enemy.setData('maxShield', Math.floor(hp * 0.6));
+        }
+
+        // Healer timer
+        if (type === 'healer') {
+            enemy.setData('healTimer', 2000);
+        }
+
+        // Juggernaut: regenerates HP over time
+        if (type === 'juggernaut') {
+            enemy.setData('regenTimer', 1000);
+        }
+
+        // Warper: phases in and out (invulnerable while phased)
+        if (type === 'warper') {
+            enemy.setData('phaseTimer', 2500 + Math.random() * 1000);
+            enemy.setData('phased', false);
+        }
+
+        // Swarm Mother: spawns mini enemies periodically
+        if (type === 'swarm') {
+            enemy.setData('spawnTimer', 3000);
+        }
+
+        // Berserker: stores base speed, accelerates when hurt
+        if (type === 'berserker') {
+            enemy.setData('baseSpd', spd);
+        }
+
+        // Titan: takes multiple lives when passing
+        if (type === 'titan') {
+            enemy.setData('livesCost', 3);
+        }
+
+        // Spawn pop-in
+        enemy.setScale(isMini ? 0 : 0);
+        this.tweens.add({ targets: enemy, scaleX: 1, scaleY: 1, duration: isMini ? 150 : 250, ease: 'Back.easeOut' });
+
+        // Health bar
+        enemy._hbBg = this.add.graphics().setDepth(21);
+        enemy._hbFill = this.add.graphics().setDepth(22);
+        // Shield bar (for shielded enemies)
+        if (type === 'shielded') {
+            enemy._shieldFill = this.add.graphics().setDepth(23);
+        }
+        this.drawHP(enemy);
+        this.enemiesAlive++;
+        return enemy;
+    }
+
+    drawHP(e) {
+        const ratio = Math.max(0, e.getData('hp') / e.getData('maxHp'));
+        const type = e.getData('type');
+        const bigTypes = ['boss','tank','juggernaut','swarm','titan'];
+        const w = type === 'titan' ? 80 : bigTypes.includes(type) ? 60 : type === 'mini' ? 24 : 40;
+        const yOff = type === 'titan' ? -50 : bigTypes.includes(type) ? -40 : type === 'mini' ? -20 : -32;
+
+        e._hbBg.clear(); e._hbBg.fillStyle(0x000000, 0.6); e._hbBg.fillRect(e.x - w/2, e.y + yOff, w, 5);
+        e._hbFill.clear();
+        const col = ratio > 0.5 ? 0x44FF44 : ratio > 0.25 ? 0xFFAA00 : 0xFF4444;
+        e._hbFill.fillStyle(col); e._hbFill.fillRect(e.x - w/2, e.y + yOff, w * ratio, 5);
+
+        // Shield bar (drawn on top, blue)
+        if (e._shieldFill) {
+            e._shieldFill.clear();
+            const shield = e.getData('shield') || 0;
+            const maxShield = e.getData('maxShield') || 1;
+            if (shield > 0) {
+                const sr = shield / maxShield;
+                e._shieldFill.fillStyle(0x4488FF, 0.8);
+                e._shieldFill.fillRect(e.x - w/2, e.y + yOff - 6, w * sr, 4);
+            }
+        }
+    }
+
+    // ---- COMBAT ----
+
+    updateAttacks(dt) {
+        for (let r = 0; r < GRID_ROWS; r++) for (let c = 0; c < GRID_COLS; c++) {
+            const blob = this.grid[r][c];
+            if (!blob || blob === this.dragBlob) continue;
+            let t = blob.getData('atkTimer') - dt;
+            if (t <= 0) {
+                const target = this.nearestEnemy(blob);
+                if (target) { this.fireProj(blob, target); t = blob.getData('atkInt'); }
+                else t = 200;
+            }
+            blob.setData('atkTimer', t);
+        }
+    }
+
+    nearestEnemy(blob) {
+        const blobLane = blob.getData('gr');
+        let best = null, bestD = Infinity;
+        this.enemies.children.each(e => {
+            if (!e.active) return;
+            // Only target enemies in this blob's lane
+            if (e.getData('lane') !== blobLane) return;
+            const d = Phaser.Math.Distance.Between(blob.x, blob.y, e.x, e.y);
+            if (d < bestD) { bestD = d; best = e; }
+        });
+        return best;
+    }
+
+    fireProj(blob, target) {
+        const p = this.physics.add.image(blob.x, blob.y, 'projectile');
+        p.setTint(TIER_COLORS[blob.getData('tier') - 1]);
+        p.setScale(0.5 + blob.getData('tier') * 0.1);
+        p.setData('dmg', blob.getData('dmg'));
+        p.setData('tier', blob.getData('tier'));
+        p.setData('lane', blob.getData('gr'));
+        p._target = target;
+        p.setDepth(15);
+        this.projectiles.add(p);
+        sfx.play('shoot');
+
+        if (!this.isDragging || blob !== this.dragBlob) {
+            this.tweens.add({ targets: blob, scaleX: 0.85, scaleY: 1.15, duration: 80, yoyo: true, ease: 'Quad.easeOut' });
+        }
+    }
+
+    updateProjectiles() {
+        this.projectiles.children.each(p => {
+            if (!p.active) return;
+            if (!p._target || !p._target.active) {
+                // Retarget only within same lane
+                const lane = p.getData('lane');
+                let best = null, bestD = Infinity;
+                this.enemies.children.each(e => {
+                    if (!e.active || e.getData('lane') !== lane) return;
+                    const d = Phaser.Math.Distance.Between(p.x, p.y, e.x, e.y);
+                    if (d < bestD) { bestD = d; best = e; }
+                });
+                if (best) p._target = best; else { p.destroy(); return; }
+            }
+            this.physics.moveToObject(p, p._target, PROJECTILE_SPEED);
+            if (p.x < -50 || p.x > GW+50 || p.y < -50 || p.y > GH+50) p.destroy();
+        });
+    }
+
+    onProjHit(p, e) {
+        if (!p.active || !e.active) return;
+        if (p.getData('lane') !== e.getData('lane')) return;
+
+        const dmg = p.getData('dmg');
+        const tier = p.getData('tier');
+        const lane = p.getData('lane');
+        const px = p.x, py = p.y;
+        const color = TIER_COLORS[tier - 1];
+
+        // Direct hit
+        this.damageEnemy(e, dmg);
+        p.destroy();
+
+        // Splash damage for tier 3+
+        if (tier >= 3) {
+            const splashRadius = 40 + (tier - 3) * 20;
+            const splashMult = 0.25 + (tier - 3) * 0.05; // 25%-60% splash
+            const splashDmg = Math.floor(dmg * splashMult);
+
+            // Explosion ring
+            const ring = this.add.graphics().setDepth(25);
+            ring.lineStyle(tier >= 7 ? 4 : 2, color, 0.7);
+            ring.strokeCircle(0, 0, 10);
+            ring.x = px; ring.y = py;
+            this.tweens.add({
+                targets: ring, scaleX: splashRadius / 10, scaleY: splashRadius / 10, alpha: 0,
+                duration: 300, ease: 'Quad.easeOut', onComplete: () => ring.destroy()
+            });
+
+            // Big burst
+            this.burst(px, py, color, 6 + tier);
+            if (tier >= 7) this.burst(px, py, 0xFFFFFF, 4);
+            this.shake(0.002 + tier * 0.0005, 60);
+
+            // Damage nearby enemies in same lane
+            this.enemies.children.each(other => {
+                if (!other.active || other === e) return;
+                if (other.getData('lane') !== lane) return;
+                if (Phaser.Math.Distance.Between(px, py, other.x, other.y) <= splashRadius) {
+                    this.damageEnemy(other, splashDmg);
+                }
+            });
+        } else {
+            // Basic hit burst for low tiers
+            this.burst(px, py, color, 3);
+        }
+        sfx.play(tier >= 5 ? 'kill' : 'hit');
+    }
+
+    damageEnemy(e, dmg) {
+        // Warper: immune while phased
+        if (e.getData('phased')) {
+            this.burst(e.x, e.y, 0xBB44FF, 3);
+            return;
+        }
+
+        // Shield absorbs damage first
+        let shield = e.getData('shield') || 0;
+        if (shield > 0) {
+            const absorbed = Math.min(shield, dmg);
+            shield -= absorbed;
+            dmg -= absorbed;
+            e.setData('shield', shield);
+            if (shield <= 0) {
+                e.setTint(0x4488FF);
+                this.time.delayedCall(100, () => { if (e.active) e.clearTint(); });
+                this.burst(e.x, e.y, 0x4488FF, 8);
+            }
+        }
+        if (dmg <= 0) { this.drawHP(e); return; }
+
+        let hp = e.getData('hp') - dmg;
+        e.setData('hp', hp);
+        e.setTint(0xffffff);
+        this.time.delayedCall(60, () => { if (e.active) e.clearTint(); });
+        this.drawHP(e);
+
+        // Berserker: speed increases as HP drops
+        if (e.getData('type') === 'berserker' && hp > 0) {
+            const hpRatio = hp / e.getData('maxHp');
+            const rage = 1 + (1 - hpRatio) * 2.5; // up to 3.5x speed at low HP
+            const newSpd = e.getData('baseSpd') * rage;
+            e.setVelocityX(-newSpd);
+            // Visual rage — tint more red as HP drops
+            if (hpRatio < 0.5) e.setTint(0xFF2200);
+            else if (hpRatio < 0.75) e.setTint(0xFF6600);
+        }
+
+        if (hp <= 0) this.killEnemy(e);
+    }
+
+    killEnemy(e) {
+        const gm = 1 + saveData.upgrades.goldRush * 0.15;
+        const earned = Math.floor(e.getData('reward') * gm);
+        this.gold += earned; this.runGold += earned;
+
+        const ex = e.x, ey = e.y;
+        const type = e.getData('type');
+        const lane = e.getData('lane');
+        const isBig = ['boss','tank','juggernaut','swarm','titan'].includes(type);
+
+        // Type-specific death colors
+        const deathColors = {
+            basic: 0xFF4444, fast: 0x22CCDD, tank: 0x7733AA,
+            healer: 0x33BB55, shielded: 0x4488FF, splitter: 0xFF8833,
+            mini: 0xFFAA55, boss: 0xFF2222,
+            juggernaut: 0x556677, warper: 0xBB44FF, swarm: 0xCC2277,
+            berserker: 0xFF5500, titan: 0xFF2200
+        };
+        const dc = deathColors[type] || 0xFF4444;
+
+        // Death explosion
+        this.burst(ex, ey, dc, isBig ? 25 : 12);
+        this.burst(ex, ey, 0xFFAA00, isBig ? 15 : 6);
+        this.shake(isBig ? 0.008 : 0.004, isBig ? 150 : 80);
+        sfx.play('kill');
+
+        // Floating gold text
+        const ft = this.add.text(ex, ey - 20, '+' + earned + 'g', {
+            fontSize: isBig ? '26px' : '18px', fontFamily: 'Arial Black,Arial', color: '#FFD700', stroke: '#000', strokeThickness: 2
+        }).setOrigin(0.5).setDepth(30);
+        this.tweens.add({ targets: ft, y: ft.y - 50, alpha: 0, duration: 1000, ease: 'Quad.easeOut', onComplete: () => ft.destroy() });
+
+        // Clean up graphics
+        if (e._hbBg) e._hbBg.destroy();
+        if (e._hbFill) e._hbFill.destroy();
+        if (e._shieldFill) e._shieldFill.destroy();
+
+        // Splitter: spawn 2 mini enemies
+        if (type === 'splitter') {
+            for (let i = 0; i < 2; i++) {
+                const mini = this.createEnemy('mini', lane, true);
+                mini.x = ex + (i === 0 ? -20 : 20);
+                mini.y = ey + (i === 0 ? -15 : 15);
+            }
+        }
+        // Swarm Mother: death burst of 3 fast enemies across lanes
+        if (type === 'swarm') {
+            for (let i = 0; i < 3; i++) {
+                const sLane = Phaser.Math.Clamp(lane + i - 1, 0, GRID_ROWS - 1);
+                const child = this.createEnemy('fast', sLane, true);
+                child.x = ex + Phaser.Math.Between(-25, 25);
+                child.y = LANE_CENTERS[sLane] + Phaser.Math.Between(-8, 8);
+            }
+        }
+
+        e.destroy();
+        this.enemiesAlive--;
+    }
+
+    updateEnemies() {
+        const dt = this.game.loop.delta;
+        this.enemies.children.each(e => {
+            if (!e.active) return;
+            this.drawHP(e);
+            const type = e.getData('type');
+
+            // Healer logic: heal nearby same-lane enemies periodically
+            if (type === 'healer') {
+                let ht = (e.getData('healTimer') || 0) - dt;
+                if (ht <= 0) {
+                    ht = 2000;
+                    const lane = e.getData('lane');
+                    this.enemies.children.each(other => {
+                        if (!other.active || other === e || other.getData('lane') !== lane) return;
+                        if (Math.abs(other.x - e.x) < 180) {
+                            const hp = other.getData('hp'), maxHp = other.getData('maxHp');
+                            if (hp < maxHp) {
+                                other.setData('hp', Math.min(hp + Math.floor(maxHp * 0.12), maxHp));
+                                this.drawHP(other);
+                                this.burst(other.x, other.y, 0x33BB55, 4);
+                            }
+                        }
+                    });
+                    const ring = this.add.graphics().setDepth(19);
+                    ring.lineStyle(2, 0x33BB55, 0.5); ring.strokeCircle(0, 0, 10);
+                    ring.x = e.x; ring.y = e.y;
+                    this.tweens.add({ targets: ring, scaleX: 15, scaleY: 15, alpha: 0, duration: 500, onComplete: () => ring.destroy() });
+                }
+                e.setData('healTimer', ht);
+            }
+
+            // Juggernaut: regenerate 2% HP per second
+            if (type === 'juggernaut') {
+                let rt = (e.getData('regenTimer') || 0) - dt;
+                if (rt <= 0) {
+                    rt = 1000;
+                    const hp = e.getData('hp'), maxHp = e.getData('maxHp');
+                    if (hp < maxHp && hp > 0) {
+                        e.setData('hp', Math.min(hp + Math.floor(maxHp * 0.02), maxHp));
+                        this.drawHP(e);
+                        // Green regen sparkle
+                        this.burst(e.x, e.y, 0x44FF88, 2);
+                    }
+                }
+                e.setData('regenTimer', rt);
+            }
+
+            // Warper: phase in/out cycle
+            if (type === 'warper') {
+                let pt = (e.getData('phaseTimer') || 0) - dt;
+                if (pt <= 0) {
+                    const phased = !e.getData('phased');
+                    e.setData('phased', phased);
+                    if (phased) {
+                        // Phase out — become ghostly
+                        e.setAlpha(0.25);
+                        this.burst(e.x, e.y, 0xBB44FF, 8);
+                        e.setData('phaseTimer', 1500); // invulnerable for 1.5s
+                    } else {
+                        // Phase back in
+                        e.setAlpha(1);
+                        this.burst(e.x, e.y, 0xDD66FF, 6);
+                        e.setData('phaseTimer', 2500 + Math.random() * 1000);
+                    }
+                }
+                e.setData('phaseTimer', pt);
+            }
+
+            // Swarm Mother: periodically spawns a mini in its lane
+            if (type === 'swarm') {
+                let st = (e.getData('spawnTimer') || 0) - dt;
+                if (st <= 0) {
+                    st = 3500;
+                    const child = this.createEnemy('mini', e.getData('lane'), true);
+                    child.x = e.x + 20;
+                    child.y = e.y + Phaser.Math.Between(-10, 10);
+                    this.burst(e.x, e.y, 0xFF88BB, 5);
+                }
+                e.setData('spawnTimer', st);
+            }
+
+            if (e.x <= DEFENSE_X) this.enemyPassed(e);
+        });
+    }
+
+    enemyPassed(e) {
+        const cost = e.getData('livesCost') || 1;
+        this.lives -= cost;
+        sfx.play('loselife');
+        this.shake(cost >= 3 ? 0.02 : 0.01, cost >= 3 ? 350 : 200);
+        if (e._hbBg) e._hbBg.destroy();
+        if (e._hbFill) e._hbFill.destroy();
+        if (e._shieldFill) e._shieldFill.destroy();
+        e.destroy();
+        this.enemiesAlive--;
+        this.cameras.main.flash(cost >= 3 ? 400 : 200, 255, 0, 0, true);
+        if (cost >= 3) {
+            this.showBanner('-' + cost + ' LIVES!');
+        }
+        if (this.lives <= 0) this.gameOver();
+    }
+
+    waveComplete() {
+        const bonus = Math.floor((8 + this.currentWave * 2) * (1 + saveData.upgrades.goldRush * 0.15));
+        this.gold += bonus; this.runGold += bonus;
+        this.showBanner('Wave ' + this.currentWave + ' Complete! +' + bonus + 'g');
+        sfx.play('wave');
+
+        if (this.currentWave > saveData.highestWave) saveData.highestWave = this.currentWave;
+        if (this.currentWave % 5 === 0) sdkHappyTime();
+
+        // Ad between waves
+        if (this.currentWave >= 5 && this.currentWave % 5 === 0 && canShowAd()) {
+            sdkGameplayStop();
+            showMidgameAd(() => sdkGameplayStart());
+        }
+
+        this.waveState = 'WAVE_DONE';
+        this.waveDelayTimer = 3000;
+        saveGame();
+    }
+
+    gameOver() {
+        if (this.isGameOver) return;
+        this.isGameOver = true;
+        sdkGameplayStop();
+        saveData.gold += this.runGold;
+        saveData.totalGoldEarned += this.runGold;
+        if (this.currentWave > saveData.highestWave) saveData.highestWave = this.currentWave;
+        saveGame();
+
+        this.showBanner('GAME OVER');
+        sfx.play('gameover');
+        this.shake(0.012, 300);
+        this.time.delayedCall(1500, () => {
+            this.scene.start('GameOverScene', { wave: this.currentWave, gold: this.runGold });
+        });
+    }
+
+    // ---- HUD ----
+
+    updateHUD() {
+        this.waveText.setText('Wave ' + Math.max(1, this.currentWave));
+        this.goldText.setText('Gold: ' + this.gold);
+        this.livesText.setText('Lives: ' + this.lives);
+        this.livesText.setColor(this.lives <= 3 ? '#FF3333' : '#FF6666');
+        this.buyBtnTxt.setText('BUY: ' + this.blobCost() + 'g');
+        if (!this.canBuy()) this.buyBtn.setTint(0x666666);
+        else this.buyBtn.clearTint();
+    }
+
+    showBanner(text) {
+        this.waveBanner.setText(text).setAlpha(1).setScale(1.3);
+        this.tweens.add({ targets: this.waveBanner, scaleX: 1, scaleY: 1, duration: 300, ease: 'Back.easeOut' });
+        this.tweens.add({ targets: this.waveBanner, alpha: 0, duration: 1200, delay: 1000, ease: 'Power2' });
+    }
+
+    // ---- VFX HELPERS ----
+
+    burst(x, y, color, count) {
+        const c = IS_MOBILE ? Math.ceil((count || 10) * 0.5) : (count || 10);
+        const p = this.add.particles(x, y, 'particle', {
+            speed: { min: 60, max: 200 },
+            scale: { start: 0.7, end: 0 },
+            lifespan: { min: 200, max: 500 },
+            tint: color,
+            emitting: false,
+            depth: 30
+        });
+        p.explode(c);
+        this.time.delayedCall(600, () => p.destroy());
+    }
+
+    shake(intensity, duration) {
+        this.cameras.main.shake(duration || 100, intensity || 0.005);
+    }
+
+    // ---- TUTORIAL ----
+
+    showTutorial() {
+        this.tutText = this.add.text(GRID_X + (GRID_COLS*CELL_SPACING)/2, GRID_Y - 30, 'Tap BUY to get your first blob!', {
+            fontSize: '20px', fontFamily: 'Arial', color: '#00FF88', stroke: '#000', strokeThickness: 2
+        }).setOrigin(0.5).setDepth(100);
+        this.tweens.add({ targets: this.tutText, alpha: 0.4, duration: 600, yoyo: true, repeat: -1 });
+    }
+
+    updateTut() {
+        if (!this.tutText) return;
+        if (this.tutStep === 1) this.tutText.setText('Buy another blob!');
+        else if (this.tutStep === 2) this.tutText.setText('Drag matching blobs to merge!');
+    }
+}
+
+// ============================================================
+// GAME OVER SCENE
+// ============================================================
+class GameOverScene extends Phaser.Scene {
+    constructor() { super('GameOverScene'); }
+
+    init(data) { this.waveReached = data.wave || 0; this.goldEarned = data.gold || 0; }
+
+    create() {
+        this.cameras.main.setBackgroundColor('#0f0f23');
+
+        this.add.text(GW/2, 120, 'GAME OVER', {
+            fontSize: '64px', fontFamily: 'Arial Black,Arial', color: '#FF4444',
+            stroke: '#000', strokeThickness: 5
+        }).setOrigin(0.5);
+
+        this.add.text(GW/2, 220, 'Wave Reached: ' + this.waveReached, {
+            fontSize: '32px', fontFamily: 'Arial', color: '#fff'
+        }).setOrigin(0.5);
+
+        this.add.text(GW/2, 270, 'Gold Earned: ' + this.goldEarned, {
+            fontSize: '28px', fontFamily: 'Arial', color: '#FFD700'
+        }).setOrigin(0.5);
+
+        this.add.text(GW/2, 310, 'Total Gold: ' + saveData.gold, {
+            fontSize: '22px', fontFamily: 'Arial', color: '#FFD700'
+        }).setOrigin(0.5);
+
+        // 2x Gold (rewarded ad)
+        this.doubleBtn = this.makeBtn(GW/2, 400, 'btn_wide', '2x GOLD (Watch Ad)', '18px', () => {
+            this.doubleBtn.disableInteractive();
+            showRewardedAd(
+                () => {
+                    saveData.gold += this.goldEarned;
+                    saveData.totalGoldEarned += this.goldEarned;
+                    saveGame();
+                    this.add.text(GW/2, 440, 'Doubled! +' + this.goldEarned + 'g', {
+                        fontSize: '22px', fontFamily: 'Arial', color: '#00FF88'
+                    }).setOrigin(0.5);
+                },
+                () => { this.doubleBtn.setInteractive({ useHandCursor: true }); }
+            );
+        });
+
+        // Upgrades
+        this.makeBtn(GW/2, 500, 'btn_blue', 'UPGRADES', '22px', () => this.scene.start('UpgradeScene', { from: 'gameover' }));
+
+        // Play Again
+        this.makeBtn(GW/2, 580, 'btn_large', 'PLAY AGAIN', '28px', () => this.scene.start('GameScene'));
+    }
+
+    makeBtn(x, y, tex, label, size, cb) {
+        const btn = this.add.image(x, y, tex).setInteractive({ useHandCursor: true });
+        this.add.text(x, y, label, { fontSize: size, fontFamily: 'Arial Black,Arial', color: '#fff' }).setOrigin(0.5);
+        btn.on('pointerover', () => btn.setTint(0xdddddd));
+        btn.on('pointerout', () => btn.clearTint());
+        btn.on('pointerdown', cb);
+        return btn;
+    }
+}
+
+// ============================================================
+// UPGRADE SCENE
+// ============================================================
+class UpgradeScene extends Phaser.Scene {
+    constructor() { super('UpgradeScene'); }
+
+    init(data) { this.from = (data && data.from) || 'menu'; }
+
+    create() {
+        this.cameras.main.setBackgroundColor('#0f0f23');
+
+        this.add.text(GW/2, 40, 'UPGRADES', {
+            fontSize: '42px', fontFamily: 'Arial Black,Arial', color: '#38B6FF',
+            stroke: '#000', strokeThickness: 4
+        }).setOrigin(0.5);
+
+        this.goldLabel = this.add.text(GW/2, 90, 'Gold: ' + saveData.gold, {
+            fontSize: '26px', fontFamily: 'Arial', color: '#FFD700'
+        }).setOrigin(0.5);
+
+        this.upgradeRows = [];
+        const startY = 160;
+        UPGRADE_DEFS.forEach((def, i) => {
+            const y = startY + i * 90;
+            const lvl = saveData.upgrades[def.key];
+            const maxed = def.maxLevel && lvl >= def.maxLevel;
+            const cost = maxed ? 0 : Math.floor(def.baseCost * Math.pow(def.mult, lvl));
+
+            // Name + description
+            this.add.text(200, y, def.name, { fontSize: '24px', fontFamily: 'Arial Black,Arial', color: '#fff' }).setOrigin(0, 0.5);
+            this.add.text(200, y + 28, def.desc + ' (Lv ' + lvl + ')', { fontSize: '16px', fontFamily: 'Arial', color: '#aaa' }).setOrigin(0, 0.5);
+
+            if (maxed) {
+                this.add.text(GW - 200, y, 'MAX', { fontSize: '22px', fontFamily: 'Arial Black,Arial', color: '#FFD700' }).setOrigin(0.5);
+                this.upgradeRows.push(null);
+            } else {
+                const btn = this.add.image(GW - 200, y + 10, 'btn_green').setInteractive({ useHandCursor: true });
+                const btnTxt = this.add.text(GW - 200, y + 10, cost + 'g', { fontSize: '20px', fontFamily: 'Arial Black,Arial', color: '#fff' }).setOrigin(0.5);
+
+                if (saveData.gold < cost) btn.setTint(0x666666);
+
+                btn.on('pointerdown', () => {
+                    const currentLvl = saveData.upgrades[def.key];
+                    const currentCost = Math.floor(def.baseCost * Math.pow(def.mult, currentLvl));
+                    if (saveData.gold >= currentCost) {
+                        saveData.gold -= currentCost;
+                        saveData.upgrades[def.key]++;
+                        saveGame();
+                        this.scene.restart({ from: this.from });
+                    }
+                });
+                btn.on('pointerover', () => { if (saveData.gold >= cost) btn.setTint(0xccffcc); });
+                btn.on('pointerout', () => { if (saveData.gold < cost) btn.setTint(0x666666); else btn.clearTint(); });
+                this.upgradeRows.push(btn);
+            }
+        });
+
+        // Back button
+        const backLabel = this.from === 'gameover' ? 'PLAY AGAIN' : 'BACK';
+        const backTarget = this.from === 'gameover' ? 'GameScene' : 'MenuScene';
+        const backBtn = this.add.image(GW/2, GH - 60, 'btn_large').setInteractive({ useHandCursor: true });
+        this.add.text(GW/2, GH - 60, backLabel, { fontSize: '28px', fontFamily: 'Arial Black,Arial', color: '#fff' }).setOrigin(0.5);
+        backBtn.on('pointerover', () => backBtn.setTint(0xdddddd));
+        backBtn.on('pointerout', () => backBtn.clearTint());
+        backBtn.on('pointerdown', () => this.scene.start(backTarget));
+    }
+}
+
+// ============================================================
+// PHASER CONFIG & INIT
+// ============================================================
+const config = {
+    type: Phaser.AUTO,
+    width: GW,
+    height: GH,
+    parent: document.body,
+    backgroundColor: '#0f0f23',
+    scale: {
+        mode: Phaser.Scale.FIT,
+        autoCenter: Phaser.Scale.CENTER_BOTH
+    },
+    physics: {
+        default: 'arcade',
+        arcade: { debug: false }
+    },
+    input: { touch: { capture: true } },
+    scene: [BootScene, MenuScene, GameScene, GameOverScene, UpgradeScene]
+};
+
+const game = new Phaser.Game(config);
+
+// Prevent default scroll for game keys + pause shortcut
+window.addEventListener('keydown', (e) => {
+    if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) {
+        e.preventDefault();
+    }
+    if (e.code === 'KeyP') {
+        const gs = game.scene.getScene('GameScene');
+        if (gs && gs.scene.isActive()) gs.togglePause();
+    }
+});
+
+// Prevent context menu on long press (mobile)
+window.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// Prevent pull-to-refresh and overscroll bounce
+document.addEventListener('touchmove', (e) => { if (e.target.closest('canvas')) e.preventDefault(); }, { passive: false });
+
+// Auto-pause when app/tab loses focus
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        const gs = game.scene.getScene('GameScene');
+        if (gs && gs.scene.isActive() && !gs.isPaused && !gs.isGameOver) gs.togglePause();
+    }
+});
+
+</script>
+</body>
+</html>
