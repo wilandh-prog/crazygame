@@ -207,6 +207,8 @@ function hideAdOverlay() {
 
 let lastAdTime = 0;
 const MIN_AD_INTERVAL = 180000;
+let lastFreeGoldTime = 0;
+const FREE_GOLD_COOLDOWN = 120000; // 2 minutes
 
 function canShowAd() { return Date.now() - lastAdTime >= MIN_AD_INTERVAL; }
 
@@ -380,7 +382,9 @@ class BootScene extends Phaser.Scene {
         await new Promise(r => setTimeout(r, 300));
         const loader = document.getElementById('loader');
         if (loader) { loader.classList.add('fade'); setTimeout(() => loader.remove(), 500); }
-        this.scene.start('MenuScene');
+        // New users land directly in gameplay (CrazyGames requirement)
+        if (!saveData.tutorialDone) this.scene.start('GameScene');
+        else this.scene.start('MenuScene');
     }
 
     genTextures() {
@@ -877,16 +881,20 @@ class MenuScene extends Phaser.Scene {
         }
 
         // Play button
-        this.makeBtn(GW/2, 340, 'btn_large', 'PLAY', '36px', () => this.scene.start('GameScene'));
+        this.makeBtn(GW/2, 340, 'btn_large', 'PLAY', '36px', () => {
+            showMidgameAd(() => this.scene.start('GameScene'));
+        });
 
         // Rush Mode button
-        this.makeBtn(GW/2, 450, 'btn_red', 'RUSH MODE', '22px', () => this.scene.start('GameScene', { mode: 'rush' }));
-        this.add.text(GW/2, 485, '90 seconds \u2022 Survive!', {
-            fontSize: '14px', fontFamily: 'Arial', color: '#FF8888'
+        this.makeBtn(GW/2, 440, 'btn_red', 'RUSH MODE', '22px', () => {
+            showMidgameAd(() => this.scene.start('GameScene', { mode: 'rush' }));
+        });
+        this.add.text(GW/2, 490, '90 seconds \u2022 Survival!', {
+            fontSize: '20px', fontFamily: 'Arial', color: '#FF8888'
         }).setOrigin(0.5);
 
         // Upgrades button
-        this.makeBtn(GW/2, 570, 'btn_blue', 'UPGRADES', '22px', () => this.scene.start('UpgradeScene', { from: 'menu' }));
+        this.makeBtn(GW/2, 580, 'btn_blue', 'UPGRADES', '22px', () => this.scene.start('UpgradeScene', { from: 'menu' }));
 
     }
 
@@ -1051,10 +1059,23 @@ class GameScene extends Phaser.Scene {
         this.buyBtn.on('pointerover', () => { if (this.canBuy()) this.buyBtn.setTint(0xccffcc); });
         this.buyBtn.on('pointerout', () => this.buyBtn.clearTint());
 
-        // Pause button (top right, next to lives)
+        // Fast Forward button (top right)
+        this.ffUnlocked = false;
+        this.ffActive = false;
+        const ffSize = IS_MOBILE ? '28px' : '20px';
+        const ffPad = IS_MOBILE ? { x: 12, y: 8 } : { x: 8, y: 4 };
+        this.ffBtn = this.add.text(GW - 20, 54, '\u25B6\u25B6', {
+            fontSize: ffSize, fontFamily: 'Arial Black,Arial', color: '#aaaacc',
+            backgroundColor: '#222244', padding: ffPad
+        }).setOrigin(1, 0).setDepth(90).setInteractive({ useHandCursor: true });
+        this.ffBtn.on('pointerover', () => this.ffBtn.setColor('#ffffff'));
+        this.ffBtn.on('pointerout', () => this.ffBtn.setColor(this.ffActive ? '#FFD700' : '#aaaacc'));
+        this.ffBtn.on('pointerdown', () => this.toggleFastForward());
+
+        // Pause button (top right, next to fast forward)
         const pauseSize = IS_MOBILE ? '32px' : '24px';
         const pausePad = IS_MOBILE ? { x: 14, y: 8 } : { x: 10, y: 4 };
-        this.pauseBtn = this.add.text(GW - 20, 54, '| |', {
+        this.pauseBtn = this.add.text(this.ffBtn.x - this.ffBtn.width - 10, 54, '| |', {
             fontSize: pauseSize, fontFamily: 'Arial Black,Arial', color: '#aaaacc',
             backgroundColor: '#222244', padding: pausePad
         }).setOrigin(1, 0).setDepth(90).setInteractive({ useHandCursor: true });
@@ -1126,6 +1147,12 @@ class GameScene extends Phaser.Scene {
         } else {
             this.physics.resume();
             this.tweens.resumeAll();
+            // Restore fast forward state if active
+            if (this.ffActive) {
+                this.physics.world.timeScale = 0.5;
+                this.tweens.timeScale = 2;
+                this.time.timeScale = 2;
+            }
             sdkGameplayStart();
             this.pauseOverlay.setVisible(false);
             this.pauseHitZone.setVisible(false);
@@ -1134,6 +1161,38 @@ class GameScene extends Phaser.Scene {
             this.resumeBtnTxt.setVisible(false);
             this.menuBtn.setVisible(false);
             this.menuBtnTxt.setVisible(false);
+        }
+    }
+
+    toggleFastForward() {
+        if (this.isGameOver || this.isPaused) return;
+        if (!this.ffUnlocked) {
+            // Lock behind rewarded ad
+            showRewardedAd(
+                () => {
+                    this.ffUnlocked = true;
+                    this.ffActive = true;
+                    this.physics.world.timeScale = 0.5; // Phaser arcade: lower = faster
+                    this.tweens.timeScale = 2;
+                    this.time.timeScale = 2;
+                    this.ffBtn.setColor('#FFD700');
+                    this.showBanner('FAST FORWARD x2!');
+                },
+                () => {} // ad skipped/error — do nothing
+            );
+            return;
+        }
+        this.ffActive = !this.ffActive;
+        if (this.ffActive) {
+            this.physics.world.timeScale = 0.5;
+            this.tweens.timeScale = 2;
+            this.time.timeScale = 2;
+            this.ffBtn.setColor('#FFD700');
+        } else {
+            this.physics.world.timeScale = 1;
+            this.tweens.timeScale = 1;
+            this.time.timeScale = 1;
+            this.ffBtn.setColor('#aaaacc');
         }
     }
 
@@ -1878,13 +1937,8 @@ class GameScene extends Phaser.Scene {
         sfx.play('wave');
 
         if (this.currentWave > saveData.highestWave) saveData.highestWave = this.currentWave;
-        if (this.currentWave % 5 === 0) sdkHappyTime();
-
-        // Ad between waves
-        if (this.currentWave >= 5 && this.currentWave % 5 === 0 && canShowAd()) {
-            sdkGameplayStop();
-            showMidgameAd(() => sdkGameplayStart());
-        }
+        // HappyTime only on special moments (boss kills at wave 10, 20, 30...)
+        if (this.currentWave % 10 === 0) sdkHappyTime();
 
         this.waveState = 'WAVE_DONE';
         this.waveDelayTimer = this.gameMode === 'rush' ? 1000 : 3000;
@@ -2068,7 +2122,9 @@ class GameOverScene extends Phaser.Scene {
         }
 
         this.makeBtn(lx, 440, 'btn_blue', 'UPGRADE SHOP', '20px', () => this.scene.start('UpgradeScene', { from: 'gameover' }));
-        this.makeBtn(lx, 520, 'btn_large', 'PLAY AGAIN', '28px', () => this.scene.start('GameScene'));
+        this.makeBtn(lx, 520, 'btn_large', 'PLAY AGAIN', '28px', () => {
+            showMidgameAd(() => this.scene.start('GameScene'));
+        });
         this.makeBtn(lx, 600, 'btn_red', 'MENU', '18px', () => this.scene.start('MenuScene'));
 
         // Right column — local leaderboard
@@ -2209,6 +2265,52 @@ class UpgradeScene extends Phaser.Scene {
             }
         });
 
+        // Free gold rewarded ad
+        const freeGoldY = startY + UPGRADE_DEFS.length * 90 + 20;
+        const cooldownLeft = Math.max(0, FREE_GOLD_COOLDOWN - (Date.now() - lastFreeGoldTime));
+        const canClaimGold = cooldownLeft <= 0;
+
+        this.freeGoldBtn = this.add.image(GW/2, freeGoldY, 'btn_wide').setInteractive({ useHandCursor: true });
+        this.freeGoldTxt = this.add.text(GW/2, freeGoldY, canClaimGold ? 'FREE GOLD (Ad)' : 'Cooldown...', {
+            fontSize: '18px', fontFamily: 'Arial Black,Arial', color: '#fff'
+        }).setOrigin(0.5);
+
+        if (!canClaimGold) {
+            this.freeGoldBtn.setTint(0x666666);
+            // Show countdown timer
+            this.freeGoldTimer = this.time.addEvent({
+                delay: 1000, loop: true,
+                callback: () => {
+                    const left = Math.max(0, FREE_GOLD_COOLDOWN - (Date.now() - lastFreeGoldTime));
+                    if (left <= 0) {
+                        this.freeGoldTxt.setText('FREE GOLD (Ad)');
+                        this.freeGoldBtn.clearTint();
+                        if (this.freeGoldTimer) this.freeGoldTimer.remove();
+                    } else {
+                        const secs = Math.ceil(left / 1000);
+                        const m = Math.floor(secs / 60), s = secs % 60;
+                        this.freeGoldTxt.setText('FREE GOLD (' + m + ':' + (s < 10 ? '0' : '') + s + ')');
+                    }
+                }
+            });
+        }
+
+        this.freeGoldBtn.on('pointerdown', () => {
+            const now = Date.now();
+            if (now - lastFreeGoldTime < FREE_GOLD_COOLDOWN) return;
+            this.freeGoldBtn.disableInteractive();
+            showRewardedAd(
+                () => {
+                    const bonus = 30 + Math.floor(saveData.highestWave * 2);
+                    saveData.gold += bonus;
+                    lastFreeGoldTime = Date.now();
+                    saveGame();
+                    this.scene.restart({ from: this.from });
+                },
+                () => { this.freeGoldBtn.setInteractive({ useHandCursor: true }); }
+            );
+        });
+
         // Back button
         const backLabel = this.from === 'gameover' ? 'PLAY AGAIN' : 'BACK';
         const backTarget = this.from === 'gameover' ? 'GameScene' : 'MenuScene';
@@ -2216,7 +2318,13 @@ class UpgradeScene extends Phaser.Scene {
         this.add.text(GW/2, GH - 60, backLabel, { fontSize: '28px', fontFamily: 'Arial Black,Arial', color: '#fff' }).setOrigin(0.5);
         backBtn.on('pointerover', () => backBtn.setTint(0xdddddd));
         backBtn.on('pointerout', () => backBtn.clearTint());
-        backBtn.on('pointerdown', () => this.scene.start(backTarget));
+        backBtn.on('pointerdown', () => {
+            if (this.from === 'gameover') {
+                showMidgameAd(() => this.scene.start(backTarget));
+            } else {
+                this.scene.start(backTarget);
+            }
+        });
     }
 }
 
