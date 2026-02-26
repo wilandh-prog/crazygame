@@ -1401,6 +1401,8 @@ class GameScene extends Phaser.Scene {
 
     update(time, delta) {
         if (this.isGameOver || this.isPaused) return;
+        // Apply fast forward multiplier
+        if (this.ffActive) delta *= 2;
         // Rush mode countdown
         if (this.gameMode === 'rush' && !this.rushComplete) {
             this.rushTimer -= delta;
@@ -1828,7 +1830,7 @@ class GameScene extends Phaser.Scene {
     }
 
     updateEnemies() {
-        const dt = this.game.loop.delta;
+        const dt = this.game.loop.delta * (this.ffActive ? 2 : 1);
         this.enemies.children.each(e => {
             if (!e.active) return;
             this.drawHP(e);
