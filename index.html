@@ -205,17 +205,13 @@ function hideAdOverlay() {
     if (el) el.style.display = 'none';
 }
 
-let lastAdTime = 0;
-const MIN_AD_INTERVAL = 180000;
 let lastFreeGoldTime = 0;
 const FREE_GOLD_COOLDOWN = 120000; // 2 minutes
 
-function canShowAd() { return Date.now() - lastAdTime >= MIN_AD_INTERVAL; }
-
 function showMidgameAd(onDone) {
-    if (!canShowAd()) { if (onDone) onDone(); return; }
+    // No local timer — CrazyGames handles ad frequency on their side
     const cb = {
-        adStarted: () => { lastAdTime = Date.now(); muteForAd(); showAdOverlay(); },
+        adStarted: () => { muteForAd(); showAdOverlay(); },
         adFinished: () => { unmuteAfterAd(); hideAdOverlay(); if (onDone) onDone(); },
         adError: () => { unmuteAfterAd(); hideAdOverlay(); if (onDone) onDone(); }
     };
@@ -225,7 +221,7 @@ function showMidgameAd(onDone) {
 
 function showRewardedAd(onReward, onSkip) {
     const cb = {
-        adStarted: () => { lastAdTime = Date.now(); muteForAd(); showAdOverlay(); },
+        adStarted: () => { muteForAd(); showAdOverlay(); },
         adFinished: () => { unmuteAfterAd(); hideAdOverlay(); if (onReward) onReward(); },
         adError: () => { unmuteAfterAd(); hideAdOverlay(); if (onSkip) onSkip(); }
     };
@@ -695,6 +691,14 @@ class BootScene extends Phaser.Scene {
         this.genButton('btn_large', 300, 80, 0x44AA44, 0x66CC66);
         this.genButton('btn_wide',  260, 60, 0x3366AA, 0x5588CC);
 
+        // Video/ad icon (play triangle in circle) for rewarded ad buttons
+        const vi = this.make.graphics({ add: false });
+        vi.fillStyle(0xffffff);
+        vi.fillCircle(12, 12, 12);
+        vi.fillStyle(0x222244);
+        vi.fillTriangle(9, 5, 9, 19, 21, 12);
+        vi.generateTexture('video_icon', 24, 24); vi.destroy();
+
         // Small particle dot
         let pd = this.make.graphics({ add: false });
         pd.fillStyle(0xffffff); pd.fillCircle(4, 4, 4);
@@ -1064,18 +1068,22 @@ class GameScene extends Phaser.Scene {
         this.ffActive = false;
         const ffSize = IS_MOBILE ? '28px' : '20px';
         const ffPad = IS_MOBILE ? { x: 12, y: 8 } : { x: 8, y: 4 };
-        this.ffBtn = this.add.text(GW - 20, 54, '\u25B6\u25B6', {
+        const ffIconPad = IS_MOBILE ? 32 : 26;
+        this.ffBtn = this.add.text(GW - 20, 54, '  \u25B6\u25B6', {
             fontSize: ffSize, fontFamily: 'Arial Black,Arial', color: '#aaaacc',
-            backgroundColor: '#222244', padding: ffPad
+            backgroundColor: '#222244', padding: { left: ffIconPad, right: ffPad.x, top: ffPad.y, bottom: ffPad.y }
         }).setOrigin(1, 0).setDepth(90).setInteractive({ useHandCursor: true });
+        // Video icon embedded inside the wider fast forward button (visible until unlocked via rewarded ad)
+        this.ffAdIcon = this.add.image(this.ffBtn.x - this.ffBtn.width + 14, 54 + Math.round(this.ffBtn.height / 2), 'video_icon')
+            .setOrigin(0.5).setDepth(91).setScale(0.85);
         this.ffBtn.on('pointerover', () => this.ffBtn.setColor('#ffffff'));
         this.ffBtn.on('pointerout', () => this.ffBtn.setColor(this.ffActive ? '#FFD700' : '#aaaacc'));
         this.ffBtn.on('pointerdown', () => this.toggleFastForward());
 
-        // Pause button (top right, next to fast forward)
+        // Pause button (top right, to the left of fast forward with gap)
         const pauseSize = IS_MOBILE ? '32px' : '24px';
         const pausePad = IS_MOBILE ? { x: 14, y: 8 } : { x: 10, y: 4 };
-        this.pauseBtn = this.add.text(this.ffBtn.x - this.ffBtn.width - 10, 54, '| |', {
+        this.pauseBtn = this.add.text(this.ffBtn.x - this.ffBtn.width - 14, 54, '| |', {
             fontSize: pauseSize, fontFamily: 'Arial Black,Arial', color: '#aaaacc',
             backgroundColor: '#222244', padding: pausePad
         }).setOrigin(1, 0).setDepth(90).setInteractive({ useHandCursor: true });
@@ -1176,6 +1184,7 @@ class GameScene extends Phaser.Scene {
                     this.tweens.timeScale = 2;
                     this.time.timeScale = 2;
                     this.ffBtn.setColor('#FFD700');
+                    if (this.ffAdIcon) this.ffAdIcon.setVisible(false);
                     this.showBanner('FAST FORWARD x2!');
                 },
                 () => {} // ad skipped/error — do nothing
@@ -2101,27 +2110,25 @@ class GameOverScene extends Phaser.Scene {
             }).setOrigin(0.5);
         }
 
-        // Buttons — only show rewarded ad if SDK ready, no adblock, and after first run
-        let adAvailable = false;
-        if (sdkReady && (saveData.totalRuns || 0) > 1 && this.goldEarned > 0) {
-            try { adAvailable = !sdk.ad.hasAdblock; } catch(e) {}
-        }
-        if (adAvailable) {
-            this.doubleBtn = this.makeBtn(lx, 360, 'btn_wide', '2x GOLD (Ad)', '18px', () => {
-                this.doubleBtn.disableInteractive();
-                showRewardedAd(
-                    () => {
-                        saveData.gold += this.goldEarned;
-                        saveData.totalGoldEarned += this.goldEarned;
-                        saveGame();
-                        this.add.text(lx, 395, 'Doubled! +' + this.goldEarned + 'g', {
-                            fontSize: '18px', fontFamily: 'Arial', color: '#00FF88'
-                        }).setOrigin(0.5);
-                    },
-                    () => { this.doubleBtn.setInteractive({ useHandCursor: true }); }
-                );
-            });
-        }
+        // x2 gold rewarded ad button — always show
+        this.doubleBtn = this.makeBtn(lx, 360, 'btn_wide', '2x GOLD', '18px', () => {
+            this.doubleBtn.disableInteractive();
+            showRewardedAd(
+                () => {
+                    const bonus = this.goldEarned > 0 ? this.goldEarned : 10;
+                    saveData.gold += bonus;
+                    saveData.totalGoldEarned += bonus;
+                    saveGame();
+                    this.add.text(lx, 395, 'Doubled! +' + bonus + 'g', {
+                        fontSize: '18px', fontFamily: 'Arial', color: '#00FF88'
+                    }).setOrigin(0.5);
+                    this.doubleAdIcon.setVisible(false);
+                },
+                () => { this.doubleBtn.setInteractive({ useHandCursor: true }); }
+            );
+        });
+        // Video icon on 2x gold button
+        this.doubleAdIcon = this.add.image(lx - 100, 360, 'video_icon').setOrigin(0.5);
 
         this.makeBtn(lx, 440, 'btn_blue', 'UPGRADE SHOP', '20px', () => this.scene.start('UpgradeScene', { from: 'gameover' }));
         this.makeBtn(lx, 520, 'btn_large', 'PLAY AGAIN', '28px', () => {
@@ -2267,31 +2274,35 @@ class UpgradeScene extends Phaser.Scene {
             }
         });
 
-        // Free gold rewarded ad
-        const freeGoldY = startY + UPGRADE_DEFS.length * 90 + 20;
+        // Free gold rewarded ad — positioned to avoid overlap with Back button
+        const freeGoldY = startY + UPGRADE_DEFS.length * 90 - 40;
         const cooldownLeft = Math.max(0, FREE_GOLD_COOLDOWN - (Date.now() - lastFreeGoldTime));
         const canClaimGold = cooldownLeft <= 0;
 
         this.freeGoldBtn = this.add.image(GW/2, freeGoldY, 'btn_wide').setInteractive({ useHandCursor: true });
-        this.freeGoldTxt = this.add.text(GW/2, freeGoldY, canClaimGold ? 'FREE GOLD (Ad)' : 'Cooldown...', {
+        this.freeGoldTxt = this.add.text(GW/2 + 14, freeGoldY, canClaimGold ? 'FREE GOLD' : 'Cooldown...', {
             fontSize: '18px', fontFamily: 'Arial Black,Arial', color: '#fff'
         }).setOrigin(0.5);
+        // Video icon on free gold button
+        this.freeGoldIcon = this.add.image(GW/2 - 80, freeGoldY, 'video_icon').setOrigin(0.5);
 
         if (!canClaimGold) {
             this.freeGoldBtn.setTint(0x666666);
+            if (this.freeGoldIcon) this.freeGoldIcon.setAlpha(0.4);
             // Show countdown timer
             this.freeGoldTimer = this.time.addEvent({
                 delay: 1000, loop: true,
                 callback: () => {
                     const left = Math.max(0, FREE_GOLD_COOLDOWN - (Date.now() - lastFreeGoldTime));
                     if (left <= 0) {
-                        this.freeGoldTxt.setText('FREE GOLD (Ad)');
+                        this.freeGoldTxt.setText('FREE GOLD');
                         this.freeGoldBtn.clearTint();
+                        if (this.freeGoldIcon) this.freeGoldIcon.setAlpha(1);
                         if (this.freeGoldTimer) this.freeGoldTimer.remove();
                     } else {
                         const secs = Math.ceil(left / 1000);
                         const m = Math.floor(secs / 60), s = secs % 60;
-                        this.freeGoldTxt.setText('FREE GOLD (' + m + ':' + (s < 10 ? '0' : '') + s + ')');
+                        this.freeGoldTxt.setText('FREE GOLD ' + m + ':' + (s < 10 ? '0' : '') + s);
                     }
                 }
             });
