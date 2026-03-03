@@ -16,6 +16,7 @@
             user-select: none;
             touch-action: none;
         }
+        canvas { outline: none; }
         #loader {
             position: fixed; inset: 0; z-index: 9999;
             display: flex; flex-direction: column;
@@ -691,13 +692,33 @@ class BootScene extends Phaser.Scene {
         this.genButton('btn_large', 300, 80, 0x44AA44, 0x66CC66);
         this.genButton('btn_wide',  260, 60, 0x3366AA, 0x5588CC);
 
-        // Video/ad icon (play triangle in circle) for rewarded ad buttons
+        // Video/ad icon (film strip with play triangle) for rewarded ad buttons
         const vi = this.make.graphics({ add: false });
+        // Film strip body (white frame)
         vi.fillStyle(0xffffff);
-        vi.fillCircle(12, 12, 12);
+        vi.fillRect(0, 0, 24, 24);
+        // Sprocket holes left
         vi.fillStyle(0x222244);
-        vi.fillTriangle(9, 5, 9, 19, 21, 12);
+        for (let y = 2; y < 22; y += 5) vi.fillRect(1, y, 3, 3);
+        // Sprocket holes right
+        for (let y = 2; y < 22; y += 5) vi.fillRect(20, y, 3, 3);
+        // Screen area (dark center)
+        vi.fillStyle(0x222244);
+        vi.fillRect(5, 1, 14, 22);
+        // Play triangle (white)
+        vi.fillStyle(0xffffff);
+        vi.fillTriangle(9, 6, 9, 18, 18, 12);
         vi.generateTexture('video_icon', 24, 24); vi.destroy();
+
+        // Fast forward arrows texture (white, tinted at runtime)
+        const ffa = this.make.graphics({ add: false });
+        ffa.fillStyle(0xffffff);
+        ffa.fillTriangle(0, 1, 0, 15, 10, 8);
+        ffa.fillTriangle(10, 1, 10, 15, 20, 8);
+        ffa.generateTexture('ff_arrows', 20, 16); ffa.destroy();
+
+        // Small FF button background
+        this.genButton('btn_ff', 60, 36, 0x1a1a44, 0x333366);
 
         // Small particle dot
         let pd = this.make.graphics({ add: false });
@@ -1063,27 +1084,22 @@ class GameScene extends Phaser.Scene {
         this.buyBtn.on('pointerover', () => { if (this.canBuy()) this.buyBtn.setTint(0xccffcc); });
         this.buyBtn.on('pointerout', () => this.buyBtn.clearTint());
 
-        // Fast Forward button (top right)
+        // Fast Forward button (top right, image-based for cross-platform consistency)
         this.ffUnlocked = false;
         this.ffActive = false;
-        const ffSize = IS_MOBILE ? '28px' : '20px';
-        const ffPad = IS_MOBILE ? { x: 12, y: 8 } : { x: 8, y: 4 };
-        const ffIconPad = IS_MOBILE ? 32 : 26;
-        this.ffBtn = this.add.text(GW - 20, 54, '  \u25B6\u25B6', {
-            fontSize: ffSize, fontFamily: 'Arial Black,Arial', color: '#aaaacc',
-            backgroundColor: '#222244', padding: { left: ffIconPad, right: ffPad.x, top: ffPad.y, bottom: ffPad.y }
-        }).setOrigin(1, 0).setDepth(90).setInteractive({ useHandCursor: true });
-        // Video icon embedded inside the wider fast forward button (visible until unlocked via rewarded ad)
-        this.ffAdIcon = this.add.image(this.ffBtn.x - this.ffBtn.width + 14, 54 + Math.round(this.ffBtn.height / 2), 'video_icon')
-            .setOrigin(0.5).setDepth(91).setScale(0.85);
-        this.ffBtn.on('pointerover', () => this.ffBtn.setColor('#ffffff'));
-        this.ffBtn.on('pointerout', () => this.ffBtn.setColor(this.ffActive ? '#FFD700' : '#aaaacc'));
+        const ffCX = GW - 50, ffCY = 72;
+        this.ffBtn = this.add.image(ffCX, ffCY, 'btn_ff').setDepth(90).setInteractive({ useHandCursor: true });
+        this.ffArrowImg = this.add.image(ffCX + 5, ffCY, 'ff_arrows').setDepth(91).setTint(0xaaaacc);
+        // Video icon on FF button (visible until unlocked via rewarded ad)
+        this.ffAdIcon = this.add.image(ffCX - 17, ffCY, 'video_icon').setOrigin(0.5).setDepth(91).setScale(0.75);
+        this.ffBtn.on('pointerover', () => this.ffArrowImg.setTint(0xffffff));
+        this.ffBtn.on('pointerout', () => this.ffArrowImg.setTint(this.ffActive ? 0xFFD700 : 0xaaaacc));
         this.ffBtn.on('pointerdown', () => this.toggleFastForward());
 
         // Pause button (top right, to the left of fast forward with gap)
         const pauseSize = IS_MOBILE ? '32px' : '24px';
         const pausePad = IS_MOBILE ? { x: 14, y: 8 } : { x: 10, y: 4 };
-        this.pauseBtn = this.add.text(this.ffBtn.x - this.ffBtn.width - 14, 54, '| |', {
+        this.pauseBtn = this.add.text(ffCX - 30 - 14, 54, '| |', {
             fontSize: pauseSize, fontFamily: 'Arial Black,Arial', color: '#aaaacc',
             backgroundColor: '#222244', padding: pausePad
         }).setOrigin(1, 0).setDepth(90).setInteractive({ useHandCursor: true });
@@ -1118,13 +1134,58 @@ class GameScene extends Phaser.Scene {
         }).setOrigin(0.5).setDepth(203).setVisible(false);
         this.menuBtn.on('pointerover', () => this.menuBtn.setTint(0xdddddd));
         this.menuBtn.on('pointerout', () => this.menuBtn.clearTint());
-        this.menuBtn.on('pointerdown', () => {
+        this.menuBtn.on('pointerdown', () => this.showQuitConfirm());
+
+        // Quit confirmation popup elements (hidden)
+        this.quitConfirmEls = [];
+        const qcBg = this.add.graphics().setDepth(210);
+        qcBg.fillStyle(0x000000, 0.75); qcBg.fillRect(0, 0, GW, GH);
+        const qcPanel = this.add.graphics().setDepth(211);
+        qcPanel.fillStyle(0x1a1a3a); qcPanel.fillRoundedRect(GW/2 - 220, GH/2 - 100, 440, 200, 16);
+        qcPanel.lineStyle(2, 0xFF4444); qcPanel.strokeRoundedRect(GW/2 - 220, GH/2 - 100, 440, 200, 16);
+        const qcBlocker = this.add.zone(GW/2, GH/2, GW, GH).setDepth(210).setInteractive();
+        const qcTitle = this.add.text(GW/2, GH/2 - 60, 'QUIT TO MENU?', {
+            fontSize: '28px', fontFamily: 'Arial Black,Arial', color: '#FF6666',
+            stroke: '#000', strokeThickness: 3
+        }).setOrigin(0.5).setDepth(212);
+        const qcMsg = this.add.text(GW/2, GH/2 - 20, 'Progress will not be saved!', {
+            fontSize: '18px', fontFamily: 'Arial', color: '#ffcccc'
+        }).setOrigin(0.5).setDepth(212);
+        const qcYes = this.add.image(GW/2 - 108, GH/2 + 50, 'btn_red').setDepth(212).setInteractive({ useHandCursor: true });
+        const qcYesTxt = this.add.text(GW/2 - 108, GH/2 + 50, 'QUIT', {
+            fontSize: '20px', fontFamily: 'Arial Black,Arial', color: '#fff'
+        }).setOrigin(0.5).setDepth(213);
+        const qcNo = this.add.image(GW/2 + 108, GH/2 + 50, 'btn_green').setDepth(212).setInteractive({ useHandCursor: true });
+        const qcNoTxt = this.add.text(GW/2 + 108, GH/2 + 50, 'CANCEL', {
+            fontSize: '20px', fontFamily: 'Arial Black,Arial', color: '#fff'
+        }).setOrigin(0.5).setDepth(213);
+        this.quitConfirmEls = [qcBg, qcPanel, qcBlocker, qcTitle, qcMsg, qcYes, qcYesTxt, qcNo, qcNoTxt];
+        this.quitConfirmEls.forEach(e => e.setVisible(false));
+        qcYes.on('pointerover', () => qcYes.setTint(0xdddddd));
+        qcYes.on('pointerout', () => qcYes.clearTint());
+        qcYes.on('pointerdown', () => {
             this.isPaused = false;
             this.physics.resume();
             this.tweens.resumeAll();
             sdkGameplayStop();
             this.scene.start('MenuScene');
         });
+        qcNo.on('pointerover', () => qcNo.setTint(0xdddddd));
+        qcNo.on('pointerout', () => qcNo.clearTint());
+        qcNo.on('pointerdown', () => this.hideQuitConfirm());
+
+        // Damage vignette overlay (red edges, used instead of full-screen flash)
+        this.damageVignette = this.add.graphics().setDepth(150).setAlpha(0);
+        for (let i = 0; i < 4; i++) {
+            const inset = i * 30;
+            const a = 0.35 - i * 0.08;
+            if (a <= 0) break;
+            this.damageVignette.fillStyle(0xff0000, a);
+            this.damageVignette.fillRect(inset, inset, GW - inset * 2, 30);
+            this.damageVignette.fillRect(inset, GH - inset - 30, GW - inset * 2, 30);
+            this.damageVignette.fillRect(inset, inset + 30, 30, GH - inset * 2 - 60);
+            this.damageVignette.fillRect(GW - inset - 30, inset + 30, 30, GH - inset * 2 - 60);
+        }
 
         // Drag input
         this.setupDrag();
@@ -1169,7 +1230,16 @@ class GameScene extends Phaser.Scene {
             this.resumeBtnTxt.setVisible(false);
             this.menuBtn.setVisible(false);
             this.menuBtnTxt.setVisible(false);
+            this.hideQuitConfirm();
         }
+    }
+
+    showQuitConfirm() {
+        this.quitConfirmEls.forEach(e => e.setVisible(true));
+    }
+
+    hideQuitConfirm() {
+        this.quitConfirmEls.forEach(e => e.setVisible(false));
     }
 
     toggleFastForward() {
@@ -1183,7 +1253,7 @@ class GameScene extends Phaser.Scene {
                     this.physics.world.timeScale = 0.5; // Phaser arcade: lower = faster
                     this.tweens.timeScale = 2;
                     this.time.timeScale = 2;
-                    this.ffBtn.setColor('#FFD700');
+                    this.ffArrowImg.setTint(0xFFD700);
                     if (this.ffAdIcon) this.ffAdIcon.setVisible(false);
                     this.showBanner('FAST FORWARD x2!');
                 },
@@ -1196,12 +1266,12 @@ class GameScene extends Phaser.Scene {
             this.physics.world.timeScale = 0.5;
             this.tweens.timeScale = 2;
             this.time.timeScale = 2;
-            this.ffBtn.setColor('#FFD700');
+            this.ffArrowImg.setTint(0xFFD700);
         } else {
             this.physics.world.timeScale = 1;
             this.tweens.timeScale = 1;
             this.time.timeScale = 1;
-            this.ffBtn.setColor('#aaaacc');
+            this.ffArrowImg.setTint(0xaaaacc);
         }
     }
 
@@ -1934,7 +2004,9 @@ class GameScene extends Phaser.Scene {
         if (e._shieldFill) e._shieldFill.destroy();
         e.destroy();
         this.enemiesAlive--;
-        this.cameras.main.flash(cost >= 3 ? 400 : 200, 255, 0, 0, true);
+        // Vignette damage flash (toned down from full-screen red flash)
+        this.damageVignette.setAlpha(cost >= 3 ? 0.8 : 0.5);
+        this.tweens.add({ targets: this.damageVignette, alpha: 0, duration: cost >= 3 ? 500 : 300, ease: 'Power2' });
         if (cost >= 3) {
             this.showBanner('-' + cost + ' LIVES!');
         }
@@ -1976,7 +2048,7 @@ class GameScene extends Phaser.Scene {
         sfx.play('wave');
         this.shake(0.008, 200);
         this.time.delayedCall(2000, () => {
-            this.scene.start('GameOverScene', { wave: this.currentWave, gold: this.runGold, newBest: false, rushWin: true });
+            this.scene.start('GameOverScene', { wave: this.currentWave, gold: this.runGold, newBest: false, rushWin: true, mode: this.gameMode });
         });
     }
 
@@ -2002,7 +2074,7 @@ class GameScene extends Phaser.Scene {
         sfx.play('gameover');
         this.shake(0.012, 300);
         this.time.delayedCall(1500, () => {
-            this.scene.start('GameOverScene', { wave: this.currentWave, gold: this.runGold, newBest: isNewBest });
+            this.scene.start('GameOverScene', { wave: this.currentWave, gold: this.runGold, newBest: isNewBest, mode: this.gameMode });
         });
     }
 
@@ -2047,8 +2119,9 @@ class GameScene extends Phaser.Scene {
     // ---- TUTORIAL ----
 
     showTutorial() {
-        this.tutText = this.add.text(GRID_X + (GRID_COLS*CELL_SPACING)/2, GRID_Y - 30, 'Tap BUY to get your first blob!', {
-            fontSize: '20px', fontFamily: 'Arial', color: '#00FF88', stroke: '#000', strokeThickness: 2
+        this.tutText = this.add.text(GW / 2, 120, 'Tap BUY to get your first blob!', {
+            fontSize: '28px', fontFamily: 'Arial Black,Arial', color: '#00FF88',
+            stroke: '#000', strokeThickness: 3, align: 'center'
         }).setOrigin(0.5).setDepth(100);
         this.tweens.add({ targets: this.tutText, alpha: 0.4, duration: 600, yoyo: true, repeat: -1 });
     }
@@ -2066,7 +2139,7 @@ class GameScene extends Phaser.Scene {
 class GameOverScene extends Phaser.Scene {
     constructor() { super('GameOverScene'); }
 
-    init(data) { this.waveReached = data.wave || 0; this.goldEarned = data.gold || 0; this.newBest = data.newBest || false; this.rushWin = data.rushWin || false; }
+    init(data) { this.waveReached = data.wave || 0; this.goldEarned = data.gold || 0; this.newBest = data.newBest || false; this.rushWin = data.rushWin || false; this.gameMode = data.mode || 'normal'; }
 
     create() {
         this.cameras.main.setBackgroundColor('#0f0f23');
@@ -2130,9 +2203,9 @@ class GameOverScene extends Phaser.Scene {
         // Video icon on 2x gold button
         this.doubleAdIcon = this.add.image(lx - 100, 360, 'video_icon').setOrigin(0.5);
 
-        this.makeBtn(lx, 440, 'btn_blue', 'UPGRADE SHOP', '20px', () => this.scene.start('UpgradeScene', { from: 'gameover' }));
+        this.makeBtn(lx, 440, 'btn_blue', 'UPGRADE SHOP', '20px', () => this.scene.start('UpgradeScene', { from: 'gameover', mode: this.gameMode }));
         this.makeBtn(lx, 520, 'btn_large', 'PLAY AGAIN', '28px', () => {
-            showMidgameAd(() => this.scene.start('GameScene'));
+            showMidgameAd(() => this.scene.start('GameScene', { mode: this.gameMode }));
         });
         this.makeBtn(lx, 600, 'btn_red', 'MENU', '18px', () => this.scene.start('MenuScene'));
 
@@ -2223,7 +2296,7 @@ class GameOverScene extends Phaser.Scene {
 class UpgradeScene extends Phaser.Scene {
     constructor() { super('UpgradeScene'); }
 
-    init(data) { this.from = (data && data.from) || 'menu'; }
+    init(data) { this.from = (data && data.from) || 'menu'; this.gameMode = (data && data.mode) || 'normal'; }
 
     create() {
         this.cameras.main.setBackgroundColor('#0f0f23');
@@ -2265,7 +2338,7 @@ class UpgradeScene extends Phaser.Scene {
                         saveData.gold -= currentCost;
                         saveData.upgrades[def.key]++;
                         saveGame();
-                        this.scene.restart({ from: this.from });
+                        this.scene.restart({ from: this.from, mode: this.gameMode });
                     }
                 });
                 btn.on('pointerover', () => { if (saveData.gold >= cost) btn.setTint(0xccffcc); });
@@ -2279,8 +2352,9 @@ class UpgradeScene extends Phaser.Scene {
         const cooldownLeft = Math.max(0, FREE_GOLD_COOLDOWN - (Date.now() - lastFreeGoldTime));
         const canClaimGold = cooldownLeft <= 0;
 
+        const freeGoldAmount = 30 + Math.floor(saveData.highestWave * 2);
         this.freeGoldBtn = this.add.image(GW/2, freeGoldY, 'btn_wide').setInteractive({ useHandCursor: true });
-        this.freeGoldTxt = this.add.text(GW/2 + 14, freeGoldY, canClaimGold ? 'FREE GOLD' : 'Cooldown...', {
+        this.freeGoldTxt = this.add.text(GW/2 + 14, freeGoldY, canClaimGold ? 'FREE ' + freeGoldAmount + 'g' : 'Cooldown...', {
             fontSize: '18px', fontFamily: 'Arial Black,Arial', color: '#fff'
         }).setOrigin(0.5);
         // Video icon on free gold button
@@ -2295,14 +2369,14 @@ class UpgradeScene extends Phaser.Scene {
                 callback: () => {
                     const left = Math.max(0, FREE_GOLD_COOLDOWN - (Date.now() - lastFreeGoldTime));
                     if (left <= 0) {
-                        this.freeGoldTxt.setText('FREE GOLD');
+                        this.freeGoldTxt.setText('FREE ' + freeGoldAmount + 'g');
                         this.freeGoldBtn.clearTint();
                         if (this.freeGoldIcon) this.freeGoldIcon.setAlpha(1);
                         if (this.freeGoldTimer) this.freeGoldTimer.remove();
                     } else {
                         const secs = Math.ceil(left / 1000);
                         const m = Math.floor(secs / 60), s = secs % 60;
-                        this.freeGoldTxt.setText('FREE GOLD ' + m + ':' + (s < 10 ? '0' : '') + s);
+                        this.freeGoldTxt.setText('FREE ' + freeGoldAmount + 'g ' + m + ':' + (s < 10 ? '0' : '') + s);
                     }
                 }
             });
@@ -2318,26 +2392,29 @@ class UpgradeScene extends Phaser.Scene {
                     saveData.gold += bonus;
                     lastFreeGoldTime = Date.now();
                     saveGame();
-                    this.scene.restart({ from: this.from });
+                    this.scene.restart({ from: this.from, mode: this.gameMode });
                 },
                 () => { this.freeGoldBtn.setInteractive({ useHandCursor: true }); }
             );
         });
 
-        // Back button
-        const backLabel = this.from === 'gameover' ? 'PLAY AGAIN' : 'BACK';
-        const backTarget = this.from === 'gameover' ? 'GameScene' : 'MenuScene';
-        const backBtn = this.add.image(GW/2, GH - 60, 'btn_large').setInteractive({ useHandCursor: true });
-        this.add.text(GW/2, GH - 60, backLabel, { fontSize: '28px', fontFamily: 'Arial Black,Arial', color: '#fff' }).setOrigin(0.5);
-        backBtn.on('pointerover', () => backBtn.setTint(0xdddddd));
-        backBtn.on('pointerout', () => backBtn.clearTint());
-        backBtn.on('pointerdown', () => {
-            if (this.from === 'gameover') {
-                showMidgameAd(() => this.scene.start(backTarget));
-            } else {
-                this.scene.start(backTarget);
-            }
-        });
+        // Play Again button (only when coming from game over)
+        if (this.from === 'gameover') {
+            const playBtn = this.add.image(GW/2, GH - 100, 'btn_large').setInteractive({ useHandCursor: true });
+            this.add.text(GW/2, GH - 100, 'PLAY AGAIN', { fontSize: '28px', fontFamily: 'Arial Black,Arial', color: '#fff' }).setOrigin(0.5);
+            playBtn.on('pointerover', () => playBtn.setTint(0xdddddd));
+            playBtn.on('pointerout', () => playBtn.clearTint());
+            playBtn.on('pointerdown', () => {
+                showMidgameAd(() => this.scene.start('GameScene', { mode: this.gameMode }));
+            });
+        }
+
+        // Back to main menu button (always visible)
+        const menuBtn = this.add.image(GW/2, GH - 35, 'btn_red').setInteractive({ useHandCursor: true });
+        this.add.text(GW/2, GH - 35, 'BACK TO MENU', { fontSize: '18px', fontFamily: 'Arial Black,Arial', color: '#fff' }).setOrigin(0.5);
+        menuBtn.on('pointerover', () => menuBtn.setTint(0xdddddd));
+        menuBtn.on('pointerout', () => menuBtn.clearTint());
+        menuBtn.on('pointerdown', () => this.scene.start('MenuScene'));
     }
 }
 
