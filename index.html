@@ -1701,7 +1701,7 @@ class GameScene extends Phaser.Scene {
             let t = blob.getData('atkTimer') - dt;
             if (t <= 0) {
                 const target = this.nearestEnemy(blob);
-                if (target) { this.fireProj(blob, target); t = blob.getData('atkInt'); }
+                if (target) { this.fireProj(blob, target); t += blob.getData('atkInt'); }
                 else t = 200;
             }
             blob.setData('atkTimer', t);
